@@ -44,6 +44,35 @@ A separate repository because it has two consumers, VS Code and the agents, so n
 
 The name is known to be extremely generic. Kept because it says what the thing is.
 
+## 2026-09-26 - Prototype: three unmodified hister instances
+
+hister v0.20.0 from its upstream flake, one instance per source, configs in `prototype/`: web on `:4433`, files on `:4434`, code on `:4435`. Each keeps its data in `~/.local/share/semantic-search/<source>/`. `semsearch` (this repository, Rust) feeds the web and code instances and queries all three. The files instance indexes its configured directories on its own.
+
+No core patch was needed. Per-source instances work around the filter gap below, and code chunking happens before hister sees the text.
+
+Code pieces:
+
+- `text-splitter` cuts each file into pieces of 400 to 3000 characters along the tree-sitter syntax tree (10 grammars), along headings for Markdown, and along blank lines otherwise. Below `max_context_length` hister embeds a piece as one vector.
+- A piece's URL is `vscode://file/<path>:<line>:1`. It is unique per piece, and a click in hister's web UI opens VS Code at that line.
+- `~/.local/share/semantic-search/code-state.json` maps each file to its hash and piece URLs. An unchanged file is skipped. A changed or removed file has its old pieces deleted, since line numbers in the URLs shift.
+- Files come from a walk that respects `.gitignore`, under every git repository at or one level below the given roots.
+
+No query or document prefix. On nixcfg's modules, no prefix and Qwen3's `Instruct: ...\nQuery: ` prefix both ranked 7 of 7 test queries correctly, with mean margins of 0.232 and 0.218.
+
+`similarity_threshold` is 0.4, up from 0.3. In the files instance, a query whose right answer scored 0.65 had its next hit at 0.36.
+
+History import: `semsearch import-history` copies `places.sqlite`, reads URL, title and last visit, and adds only URLs the instance lacks, so content captured by the extension is never overwritten. The main profile gave 92,266 entries after dropping fragments, `utm_` links and duplicates. A second run added 0.
+
+The Firefox extension (AMO `hister` 0.31.0) defaults to `http://127.0.0.1:4433/`, the web instance, so it needs no configuration. Its content script only submits a visible page.
+
+hister behaviour the client has to handle, found while building it:
+
+- Adds return before embedding. Embedding runs from a queue persisted in the instance's database, so an interrupted run resumes.
+- The queue logs `database is locked` while a batch import writes. The job is retried, not lost.
+- A semantic hit that is also a keyword hit has no `document` of its own; its title is in `documents`.
+- Semantic search returns `semantic_search.result_limit` hits and ignores the query's `limit`.
+- `HISTER__SEMANTIC_SEARCH__EMBEDDING_ENDPOINT` overrides the endpoint without editing the config, which is how the backlog went to a GPU server on `:5003`.
+
 ## Open - Build on hister or rewrite
 
 hister (Go, AGPL-3.0) covers web history and files: a Firefox extension that captures full page content, a keyword index, file parsers, MCP, a web UI and a TUI. It calls an OpenAI-compatible `/v1/embeddings` endpoint, so it can use `:5002`.

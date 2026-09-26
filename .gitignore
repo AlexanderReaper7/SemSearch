@@ -1,0 +1,3 @@
+/target
+# hister writes its TUI defaults beside whichever config it loads.
+/prototype/tui.yaml

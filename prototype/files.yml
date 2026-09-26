@@ -1,0 +1,41 @@
+# hister instance for the files source. See ../docs/decisions.md.
+app:
+  directory: /home/alexander/.local/share/semantic-search/files
+  title: "Search: files"
+  subtitle: ""
+  color_scheme: dark
+  search_url: https://duckduckgo.com/?q={query}
+  redirect_on_no_results: false
+server:
+  address: 127.0.0.1:4434
+  database: db.sqlite3
+indexer:
+  detect_languages: true
+  max_file_size_mb: 5
+  directories:
+    - path: /home/alexander/Desktop/scratch
+      filetypes: [md, txt, pdf, docx, org, html]
+      excludes: [node_modules, site-packages, target]
+    - path: /home/alexander/Documents
+      filetypes: [md, txt, pdf, docx, org, html]
+    - path: /home/alexander/Downloads
+      filetypes: [md, txt, pdf, docx, org, html]
+semantic_search:
+  enable: true
+  # Overridden with HISTER__SEMANTIC_SEARCH__EMBEDDING_ENDPOINT while a
+  # backlog indexes on the GPU. The vectors match to cosine 0.9997.
+  embedding_endpoint: http://127.0.0.1:5002/v1/embeddings
+  embedding_model: Octen-Embedding-4B
+  embedding_timeout: 600
+  dimensions: 2560
+  max_context_length: 1024
+  chunk_overlap: 64
+  max_embedding_batch_size: 8
+  # Octen publishes no prefix. None beat the Qwen3 instruct prefix on a
+  # 7-query test over nixcfg modules, 2026-09-26: both 7/7, margin 0.232 vs 0.218.
+  query_prefix: ""
+  document_prefix: ""
+  similarity_threshold: 0.4
+  result_limit: 30
+  semantic_weight: 0.5
+  max_embedding_concurrency: 2
