@@ -5,16 +5,25 @@
 //! shift when a file changes, so a changed file has all its old pieces deleted
 //! before the new ones are added. The state file remembers which URLs each
 //! file produced.
+//!
+//! A piece's `added` is the file's first commit and `metadata.updated` its
+//! last, or the modification time when the file has uncommitted changes. The
+//! embedded text starts with the change date, so a query can name a time.
 
-use crate::{Source, chunk, hister};
+use crate::{Source, chunk, hister, time};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::process::Command;
 use std::path::{Path, PathBuf};
 
 /// Files above this are generated or data, not code worth searching.
 const MAX_FILE_BYTES: u64 = 512 * 1024;
+
+/// Raised whenever what a piece carries changes, so that every file is
+/// re-added once. A re-added piece whose text is unchanged is not re-embedded.
+const PIECE_FORMAT: u32 = 2;
 
 /// Generated files that are text but never what a search is after.
 const SKIP_NAMES: &[&str] = &["Cargo.lock", "flake.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock"];
@@ -56,6 +65,33 @@ fn repositories(roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
     Ok(repos)
 }
 
+/// First and last commit time of every path in the history, relative to the
+/// repository root. One `git log` walks the whole history, newest first.
+fn commit_times(repo: &Path) -> HashMap<PathBuf, (i64, i64)> {
+    let mut times = HashMap::new();
+    let Ok(out) = Command::new("git").arg("-C").arg(repo).args(["log", "--format=%x01%ct", "--name-only", "--no-renames"]).output() else {
+        return times;
+    };
+    let mut when = 0;
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        if let Some(t) = line.strip_prefix('\x01') {
+            when = t.parse().unwrap_or(0);
+        } else if !line.is_empty() {
+            let e = times.entry(PathBuf::from(line)).or_insert((when, when));
+            e.0 = when;
+        }
+    }
+    times
+}
+
+/// Paths with uncommitted changes, including untracked ones.
+fn dirty(repo: &Path) -> HashSet<PathBuf> {
+    let Ok(out) = Command::new("git").arg("-C").arg(repo).args(["status", "--porcelain", "-z", "--untracked-files=all", "--no-renames"]).output() else {
+        return HashSet::new();
+    };
+    out.stdout.split(|&b| b == 0).filter(|e| e.len() > 3).map(|e| PathBuf::from(String::from_utf8_lossy(&e[3..]).as_ref())).collect()
+}
+
 fn url(path: &Path, line: usize) -> String {
     // Only the space needs escaping in practice: `~/Projects/linux transition`.
     format!("vscode://file{}:{line}:1", path.display().to_string().replace('%', "%25").replace(' ', "%20"))
@@ -76,6 +112,8 @@ pub fn index(roots: &[PathBuf]) -> Result<()> {
         let mut docs = Vec::new();
         let mut stale = Vec::new();
         let mut updates = Vec::new();
+        let commits = commit_times(&repo);
+        let changed = dirty(&repo);
 
         for entry in ignore::WalkBuilder::new(&repo).build() {
             let Ok(entry) = entry else { continue };
@@ -97,7 +135,20 @@ pub fn index(roots: &[PathBuf]) -> Result<()> {
             let Ok(text) = String::from_utf8(bytes) else { continue };
             seen.insert(path.to_path_buf());
 
-            let hash: String = Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+            let rel_path = path.strip_prefix(&repo).unwrap_or(path);
+            let mtime = entry.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs() as i64);
+            let (added, updated) = match commits.get(rel_path) {
+                Some(&(first, last)) if !changed.contains(rel_path) => (first, last),
+                Some(&(first, _)) => (first, mtime),
+                None => (mtime, mtime),
+            };
+
+            // The date is part of the embedded text, so a new date is a change.
+            // PIECE_FORMAT is too: raising it re-adds every piece once.
+            let hash: String = Sha256::new()
+                .chain_update(PIECE_FORMAT.to_le_bytes())
+                .chain_update(text.as_bytes())
+                .chain_update(updated.to_le_bytes()).finalize().iter().map(|b| format!("{b:02x}")).collect();
             if state.files.get(path).is_some_and(|f| f.hash == hash) {
                 continue;
             }
@@ -105,7 +156,8 @@ pub fn index(roots: &[PathBuf]) -> Result<()> {
                 stale.extend(old.urls.iter().cloned());
             }
 
-            let rel = path.strip_prefix(&repo).unwrap_or(path).display().to_string();
+            let rel = rel_path.display().to_string();
+            let header = format!("Changed {}\n", time::long(updated));
             let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
             let mut urls = Vec::new();
             for piece in chunk::split(&ext, &text) {
@@ -117,9 +169,10 @@ pub fn index(roots: &[PathBuf]) -> Result<()> {
                 docs.push(hister::Doc {
                     url: u,
                     title: format!("{name}/{rel}:{}", piece.line),
-                    text: piece.text,
+                    text: header.clone() + &piece.text,
                     label: name.clone(),
-                    added: 0,
+                    added,
+                    metadata: serde_json::json!({ "updated": updated }),
                 });
             }
             updates.push((path.to_path_buf(), FileState { hash, urls }));
@@ -129,6 +182,10 @@ pub fn index(roots: &[PathBuf]) -> Result<()> {
             continue;
         }
         eprintln!("{name}: {} changed files, {} pieces", updates.len(), docs.len());
+        // A URL that comes back is overwritten by the add instead. Deleting it
+        // first would re-embed a piece whose text did not change.
+        let fresh: HashSet<&String> = updates.iter().flat_map(|(_, f)| &f.urls).collect();
+        stale.retain(|u| !fresh.contains(u));
         hister::delete(&server, &stale)?;
         let failed = hister::add(&server, &docs)?;
         added += docs.len() - failed;

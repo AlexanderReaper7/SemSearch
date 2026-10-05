@@ -36,6 +36,6 @@ semantic_search:
   query_prefix: ""
   document_prefix: ""
   similarity_threshold: 0.4
-  result_limit: 30
+  result_limit: 100
   semantic_weight: 0.5
   max_embedding_concurrency: 2

@@ -24,6 +24,14 @@ function search(source, query) {
   });
 }
 
+// Unix seconds -> `2026-09-22 14:03` in local time.
+function date(unix) {
+  if (!unix) return '';
+  const d = new Date(unix * 1000);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 // vscode://file/home/x/a b.rs:12:1 -> { file: '/home/x/a b.rs', line: 12 }
 function codeLocation(url) {
   const m = /^vscode:\/\/file(\/.*):(\d+):\d+$/.exec(url);
@@ -54,7 +62,7 @@ async function run(source) {
   const picked = await vscode.window.showQuickPick(
     hits.map((hit) => ({
       label: hit.title || hit.url,
-      description: `${hit.similarity.toFixed(3)}  ${hit.source}`,
+      description: `${hit.similarity.toFixed(3)}  ${hit.source}  ${date(hit.updated)}`,
       detail: hit.chunk.replace(/\s+/g, ' ').slice(0, 200),
       hit,
     })),

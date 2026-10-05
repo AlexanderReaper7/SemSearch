@@ -7,6 +7,7 @@ mod chunk;
 mod hister;
 mod history;
 mod code;
+mod time;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -73,6 +74,13 @@ enum Command {
         /// JSON lines instead of text, for agents.
         #[arg(long)]
         json: bool,
+        /// Only hits last visited or changed at or after this: `2026-09-22`,
+        /// `2026-09-22 14:00`, or an age such as `3d` or `2w`.
+        #[arg(long)]
+        since: Option<String>,
+        /// Only hits last visited or changed before this. Same forms as --since.
+        #[arg(long)]
+        before: Option<String>,
         #[arg(required = true, num_args = 1..)]
         query: Vec<String>,
     },
@@ -90,19 +98,34 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::IndexCode { roots } => code::index(&roots),
         Command::ImportHistory { places } => history::import(&places),
-        Command::Search { source, limit, json, query } => {
+        Command::Search { source, limit, json, since, before, query } => {
+            let since = since.as_deref().map(time::parse_bound).transpose()?;
+            let before = before.as_deref().map(time::parse_bound).transpose()?;
             let sources: Vec<Source> = match source {
                 SourceArg::Web => vec![Source::Web],
                 SourceArg::Files => vec![Source::Files],
                 SourceArg::Code => vec![Source::Code],
                 SourceArg::All => Source::ALL.to_vec(),
             };
-            let hits = hister::search(&sources, &query.join(" "), limit)?;
+            // hister's vector search cannot filter by date, so the filter
+            // runs here over the up to `result_limit` hits each source returns.
+            let hits = hister::search(&sources, &query.join(" "))?
+                .into_iter()
+                .filter(|h| since.is_none_or(|t| h.updated >= t) && before.is_none_or(|t| h.updated < t))
+                .take(limit);
             for hit in hits {
                 if json {
                     println!("{}", serde_json::to_string(&hit)?);
                 } else {
-                    println!("{:.3}  [{}]  {}\n       {}", hit.similarity, hit.source, hit.url, hit.title);
+                    let visits = hit.visits.map(|n| format!("  ({n} visits)")).unwrap_or_default();
+                    println!(
+                        "{:.3}  [{}]  {}  {}\n       {}{visits}",
+                        hit.similarity,
+                        hit.source,
+                        time::short(hit.updated),
+                        hit.url,
+                        hit.title
+                    );
                 }
             }
             Ok(())

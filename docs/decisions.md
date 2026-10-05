@@ -73,6 +73,29 @@ hister behaviour the client has to handle, found while building it:
 - Semantic search returns `semantic_search.result_limit` hits and ignores the query's `limit`.
 - `HISTER__SEMANTIC_SEARCH__EMBEDDING_ENDPOINT` overrides the endpoint without editing the config, which is how the backlog went to a GPU server on `:5003`.
 
+## 2026-09-26 - Dates in results, in filters and in the embedded text
+
+The user asked for date and time, and chose all three places.
+
+Which times: web history carries first visit, last visit and visit count, read from `moz_historyvisits`. Code carries the file's first and last commit, from one `git log` per repository, or the modification time for a file with uncommitted changes. Files carry what hister's file indexer stores: first indexing and modification time.
+
+Where they live in hister: the first time is `added`. The last time is `metadata.updated`, because hister sets `updated` to the time of the add for every document that is not a local file (`document/document.go`, `processWeb`). hister also keeps a stored `added` over a new one, so correcting it takes a delete and re-add.
+
+Results: every hit shows its last time. `--json` adds `added`, `updated` and, for web history, `visits`. The VS Code quick pick shows the date too.
+
+Filters: `--since` and `--before` on the last time. hister's vector search cannot filter by date, so semsearch filters the hits after the search. `result_limit` went from 30 to 100 so that a filter has more to choose from. A narrow range can still come back empty when older hits fill the 100.
+
+Embedded text: an imported history entry embeds as its title, URL and "Visited 3 times, first on Tuesday 22 September 2026, 14:03, last on ...". A code piece starts with "Changed <date>". Weekday and month are spelled out so a query naming them has words to match. Two gaps, both left open:
+
+- Files have no date in their embedded text. hister's directory indexer writes them, and semsearch cannot change their text without patching hister or replacing its file indexer.
+- A page the extension captures loses its date line, since the extension sends the page's own text. Its dates still show in results and filters: `added` stays the first visit, and hister's `updated` is the last submission, which is the last visit.
+
+Cost: a new date in the embedded text is a re-embed. For code that is one file per commit. For history, every import re-embeds the entries visited since the last one.
+
+## 2026-09-26 - When hister re-embeds
+
+hister embeds a document when it is new, or when an add carries text different from the stored text (`embeddingTextChanged` in `server/indexer/indexer.go`). Title, URL, dates and metadata do not count. The extension submits a page on load, then at most every 30 s while its text keeps changing, and again when the tab is hidden or closed. A revisit with unchanged text costs an index write. A page whose text changes on every load (a clock, a comment count, a live feed) is embedded again on every visit, and every 30 s while it stays open and changing. On the CPU embedder that is the main running cost. No throttle exists in hister; a skip rule per site, or a patch that ignores small changes, are the options if it shows up.
+
 ## Open - Build on hister or rewrite
 
 hister (Go, AGPL-3.0) covers web history and files: a Firefox extension that captures full page content, a keyword index, file parsers, MCP, a web UI and a TUI. It calls an OpenAI-compatible `/v1/embeddings` endpoint, so it can use `:5002`.

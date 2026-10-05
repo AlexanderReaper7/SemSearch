@@ -11,6 +11,7 @@ cargo build --release
 semsearch index-code ~/Projects                 # chunk and sync every repository
 semsearch import-history <profile>/places.sqlite # URL and title, never a fetch
 semsearch search -s code|web|files|all "query"
+semsearch search -s web --since 2w "query"      # also --before; a date, date and time, or age
 ```
 
 `vscode/` is a VS Code extension (Ctrl+Alt+F, "Semantic Search: Code") that calls `semsearch` and opens the hit at its line. Symlink it into `~/.vscode/extensions/local.semantic-search-0.1.0`.
