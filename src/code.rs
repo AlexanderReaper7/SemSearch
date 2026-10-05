@@ -6,11 +6,11 @@
 //! before the new ones are added. The state file remembers which URLs each
 //! file produced.
 //!
-//! A piece's `added` is the file's first commit and `metadata.updated` its
-//! last, or the modification time when the file has uncommitted changes. The
-//! embedded text starts with the change date, so a query can name a time.
+//! A piece is a hister `code` document. Its `added` is the file's first commit
+//! and `updated` its last, or the modification time when the file has
+//! uncommitted changes. hister embeds `updated` as the piece's date.
 
-use crate::{Source, chunk, hister, time};
+use crate::{chunk, hister};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -23,7 +23,7 @@ const MAX_FILE_BYTES: u64 = 512 * 1024;
 
 /// Raised whenever what a piece carries changes, so that every file is
 /// re-added once. A re-added piece whose text is unchanged is not re-embedded.
-const PIECE_FORMAT: u32 = 2;
+const PIECE_FORMAT: u32 = 3;
 
 /// Generated files that are text but never what a search is after.
 const SKIP_NAMES: &[&str] = &["Cargo.lock", "flake.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock"];
@@ -98,8 +98,13 @@ fn url(path: &Path, line: usize) -> String {
 }
 
 pub fn index(roots: &[PathBuf]) -> Result<()> {
-    let server = Source::Code.server();
+    let server = hister::server();
     let state_file = state_path();
+    // The timer and the VS Code extension both run index-code. One run at a
+    // time, since each rewrites the state file.
+    std::fs::create_dir_all(state_file.parent().expect("state path has a parent"))?;
+    let lock = std::fs::File::create(state_file.with_extension("lock"))?;
+    lock.lock()?;
     let mut state: State = match std::fs::read(&state_file) {
         Ok(bytes) => serde_json::from_slice(&bytes).context("code state file")?,
         Err(_) => State::default(),
@@ -143,8 +148,9 @@ pub fn index(roots: &[PathBuf]) -> Result<()> {
                 None => (mtime, mtime),
             };
 
-            // The date is part of the embedded text, so a new date is a change.
-            // PIECE_FORMAT is too: raising it re-adds every piece once.
+            // A new date is sent even when the text is unchanged, so results
+            // and date filters show it. hister re-embeds only on a text change.
+            // Raising PIECE_FORMAT re-adds every piece once.
             let hash: String = Sha256::new()
                 .chain_update(PIECE_FORMAT.to_le_bytes())
                 .chain_update(text.as_bytes())
@@ -157,7 +163,6 @@ pub fn index(roots: &[PathBuf]) -> Result<()> {
             }
 
             let rel = rel_path.display().to_string();
-            let header = format!("Changed {}\n", time::long(updated));
             let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
             let mut urls = Vec::new();
             for piece in chunk::split(&ext, &text) {
@@ -169,10 +174,12 @@ pub fn index(roots: &[PathBuf]) -> Result<()> {
                 docs.push(hister::Doc {
                     url: u,
                     title: format!("{name}/{rel}:{}", piece.line),
-                    text: header.clone() + &piece.text,
+                    text: piece.text,
+                    kind: hister::Kind::Code,
                     label: name.clone(),
                     added,
-                    metadata: serde_json::json!({ "updated": updated }),
+                    updated,
+                    metadata: serde_json::Value::Null,
                 });
             }
             updates.push((path.to_path_buf(), FileState { hash, urls }));

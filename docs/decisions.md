@@ -107,6 +107,17 @@ The facts on the table when the user chose:
 
 First scope, chosen by the user: filters in vector search, and dates in the embedded text of local files. Left out for now: two embedding endpoints (upstream #801 already gives queries their own slots) and a re-embed throttle (no measured cost yet). The plan and its open questions are in [hister-fork.md](hister-fork.md).
 
+## 2026-10-05 - One instance for every source, code as its own document type
+
+The user put code search first and files under `~` second, and chose:
+
+- **One hister instance for every source**, replacing the three prototype instances. The source becomes a filter. Measured cost on 83,000 web documents: 0.4-0.5 s for a filter narrowing to one source, at most 0.5 s more for one keeping nearly everything ([hister-fork.md](hister-fork.md), step 1). Supersedes "Prototype: three unmodified hister instances" for how instances run.
+- **A `code` document type in the fork**, next to `web`, `local` and `remote`. semsearch posts code pieces with it, so the sources are `type:code`, `type:local` and `type:web`. Before this, code pieces were stored as `type:web` with domain `file`, because of their `vscode://file/` URLs. Chosen over a `code` label, which hister would have had to special-case and a user can edit.
+- **Dates in hister's embedded metadata for every document, before any re-index**, so code is embedded once. A web page embeds its first visit (`added`), which never changes. Code and files embed their modification date (`updated`), which only changes along with the text. semsearch stops writing its own date lines.
+- **Services in nixcfg**, as systemd user units, built from the fork and this repository as flake inputs.
+- **Freshness**: a systemd timer runs `index-code` for normal use, and the VS Code extension re-indexes the open project when a file in it changes.
+- **Query embedding**: warn past 3 s, give up at 30 s, and show what was found by then. In practice that means keyword hits when the semantic part fails.
+
 ## Closed 2026-10-05 - Build on hister or rewrite
 
 hister (Go, AGPL-3.0) covers web history and files: a Firefox extension that captures full page content, a keyword index, file parsers, MCP, a web UI and a TUI. It calls an OpenAI-compatible `/v1/embeddings` endpoint, so it can use `:5002`.

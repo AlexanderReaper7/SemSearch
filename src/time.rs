@@ -12,12 +12,6 @@ pub fn short(unix: i64) -> String {
     zoned(unix).filter(|_| unix > 0).map(|z| z.strftime("%Y-%m-%d %H:%M").to_string()).unwrap_or_default()
 }
 
-/// `Tuesday 22 September 2026, 14:03`, for embedded text. Weekday and month
-/// are words so that a query naming them has something to match.
-pub fn long(unix: i64) -> String {
-    zoned(unix).filter(|_| unix > 0).map(|z| z.strftime("%A %-d %B %Y, %H:%M").to_string()).unwrap_or_default()
-}
-
 /// A bound for `--since` and `--before`: `2026-09-22`, `2026-09-22 14:00`,
 /// or an age such as `3d` or `2w` counted back from now.
 pub fn parse_bound(s: &str) -> Result<i64> {

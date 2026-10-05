@@ -1,7 +1,7 @@
-//! `semsearch`: feeds the three hister instances and queries them.
+//! `semsearch`: feeds the hister instance and queries it.
 //!
-//! Each source is its own hister instance, because hister's semantic search
-//! ignores `type:` and `label:` filters. See docs/decisions.md.
+//! Every source lives in one instance of the hister fork, and a source is a
+//! document type: `code`, `local` for files, `web`. See docs/decisions.md.
 
 mod chunk;
 mod hister;
@@ -28,16 +28,23 @@ pub enum Source {
 }
 
 impl Source {
-    pub const ALL: [Source; 3] = [Source::Web, Source::Files, Source::Code];
+    /// The query filter that selects this source.
+    pub fn filter(self) -> &'static str {
+        match self {
+            Source::Web => "type:web",
+            Source::Files => "type:file",
+            Source::Code => "type:code",
+        }
+    }
 
-    /// The hister instance that holds this source. Ports match prototype/*.yml.
-    pub fn server(self) -> String {
-        let (var, port) = match self {
-            Source::Web => ("SEMSEARCH_WEB_URL", 4433),
-            Source::Files => ("SEMSEARCH_FILES_URL", 4434),
-            Source::Code => ("SEMSEARCH_CODE_URL", 4435),
-        };
-        std::env::var(var).unwrap_or_else(|_| format!("http://127.0.0.1:{port}"))
+    /// The source of a document, from hister's numeric type.
+    pub fn of_type(t: Option<u64>) -> Option<Source> {
+        match t? {
+            0 => Some(Source::Web),
+            1 | 2 => Some(Source::Files),
+            3 => Some(Source::Code),
+            _ => None,
+        }
     }
 
     pub fn name(self) -> &'static str {
@@ -51,13 +58,13 @@ impl Source {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Chunk every git repository under the given roots and sync it to the code instance.
+    /// Chunk every git repository under the given roots and sync it to hister.
     IndexCode {
         /// Directories that are repositories or contain repositories one level down.
         #[arg(required = true)]
         roots: Vec<PathBuf>,
     },
-    /// Add Firefox history entries that the web instance lacks, as URL and title only.
+    /// Add Firefox history entries to hister, as URL, title and visit times.
     ///
     /// Never fetches a page and never overwrites a document that exists, so
     /// content captured live by the extension survives a re-run.
@@ -101,26 +108,22 @@ fn main() -> Result<()> {
         Command::Search { source, limit, json, since, before, query } => {
             let since = since.as_deref().map(time::parse_bound).transpose()?;
             let before = before.as_deref().map(time::parse_bound).transpose()?;
-            let sources: Vec<Source> = match source {
-                SourceArg::Web => vec![Source::Web],
-                SourceArg::Files => vec![Source::Files],
-                SourceArg::Code => vec![Source::Code],
-                SourceArg::All => Source::ALL.to_vec(),
+            let source = match source {
+                SourceArg::Web => Some(Source::Web),
+                SourceArg::Files => Some(Source::Files),
+                SourceArg::Code => Some(Source::Code),
+                SourceArg::All => None,
             };
-            // hister's vector search cannot filter by date, so the filter
-            // runs here over the up to `result_limit` hits each source returns.
-            let hits = hister::search(&sources, &query.join(" "))?
-                .into_iter()
-                .filter(|h| since.is_none_or(|t| h.updated >= t) && before.is_none_or(|t| h.updated < t))
-                .take(limit);
-            for hit in hits {
+            let query = query.join(" ");
+            let hits = hister::search(source, &hister::Search { query: &query, since, before })?;
+            for hit in hits.into_iter().take(limit) {
                 if json {
                     println!("{}", serde_json::to_string(&hit)?);
                 } else {
                     let visits = hit.visits.map(|n| format!("  ({n} visits)")).unwrap_or_default();
+                    let score = hit.similarity.map_or("  kw ".to_string(), |s| format!("{s:.3}"));
                     println!(
-                        "{:.3}  [{}]  {}  {}\n       {}{visits}",
-                        hit.similarity,
+                        "{score}  [{}]  {}  {}\n       {}{visits}",
                         hit.source,
                         time::short(hit.updated),
                         hit.url,

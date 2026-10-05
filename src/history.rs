@@ -1,4 +1,4 @@
-//! Firefox history into the web instance, as title, URL and visit times.
+//! Firefox history into hister, as title, URL and visit times.
 //!
 //! Page content comes only from the browser extension, captured while the page
 //! was open. This importer never fetches a page, and it never replaces a
@@ -7,10 +7,11 @@
 //! free".
 //!
 //! A document the importer owns carries `metadata.source = "firefox-places"`,
-//! or has empty text (written by the first importer, before dates). Only those
-//! are rewritten, and only when their text or first visit changed.
+//! or has empty text. Only those are rewritten, and only when something
+//! changed. Its text is empty: hister embeds the title, URL and first visit
+//! as the document's metadata chunk.
 
-use crate::{Source, hister, time};
+use crate::hister;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -75,58 +76,43 @@ fn read_places(places: &Path) -> Result<Vec<(String, Entry)>> {
     Ok(entries)
 }
 
-/// The embedded text. Title and URL are repeated from the metadata so that
-/// the one chunk carries both the subject and the dates.
-fn text(url: &str, e: &Entry) -> String {
-    let times = if e.visits == 1 { "once".to_string() } else { format!("{} times", e.visits) };
-    let mut s = format!("{}\n{url}\nVisited {times}, first on {}", e.title, time::long(e.first));
-    if e.visits > 1 {
-        s += &format!(", last on {}", time::long(e.last));
-    }
-    s
-}
-
 fn owned(doc: &Value) -> bool {
     doc["metadata"]["source"].as_str() == Some(OWNER) || doc["text"].as_str().is_none_or(str::is_empty)
 }
 
 pub fn import(places: &Path) -> Result<()> {
-    let server = Source::Web.server();
+    let server = hister::server();
     let entries = read_places(places)?;
     eprintln!("{} history entries", entries.len());
 
     let (mut added, mut unchanged, mut captured) = (0usize, 0usize, 0usize);
     for part in entries.chunks(hister::MAX_BATCH * 10) {
         let urls: Vec<String> = part.iter().map(|(u, _)| u.clone()).collect();
-        let mut stale = Vec::new();
         let mut docs = Vec::new();
         for ((url, e), stored) in part.iter().zip(hister::get(&server, &urls)?) {
             let doc = hister::Doc {
                 url: url.clone(),
                 title: e.title.clone(),
-                text: text(url, e),
+                text: String::new(),
+                kind: hister::Kind::Web,
                 label: String::new(),
                 added: e.first,
-                metadata: json!({ "source": OWNER, "visits": e.visits, "updated": e.last }),
+                updated: e.last,
+                metadata: json!({ "source": OWNER, "visits": e.visits }),
             };
             match stored {
                 Some(s) if !owned(&s) => captured += 1,
-                Some(s) if s["text"].as_str() == Some(&doc.text) && s["added"].as_i64() == Some(e.first) && s["metadata"] == doc.metadata => {
+                Some(s)
+                    if s["title"].as_str() == Some(&doc.title)
+                        && s["added"].as_i64() == Some(e.first)
+                        && s["updated"].as_i64() == Some(e.last)
+                        && s["metadata"] == doc.metadata =>
+                {
                     unchanged += 1
                 }
-                Some(s) => {
-                    // hister keeps a stored `added` over the one sent. Other
-                    // changes are a plain add, which re-embeds only if the
-                    // text changed.
-                    if s["added"].as_i64() != Some(e.first) {
-                        stale.push(url.clone());
-                    }
-                    docs.push(doc);
-                }
-                None => docs.push(doc),
+                _ => docs.push(doc),
             }
         }
-        hister::delete(&server, &stale)?;
         added += docs.len() - hister::add(&server, &docs)?;
         eprintln!("  {added} written, {unchanged} unchanged, {captured} captured by the extension");
     }

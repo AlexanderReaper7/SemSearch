@@ -1,17 +1,21 @@
-# hister instance for the code source. See ../docs/decisions.md.
+# The one hister instance for every source: code, files and web history,
+# selected with type:code, type:file and type:web. Runs the fork at
+# github.com/AlexanderReaper7/hister. See ../docs/decisions.md.
 app:
-  directory: /home/alexander/.local/share/semantic-search/code
-  title: "Search: code"
+  directory: /home/alexander/.local/share/semantic-search/hister
+  title: "Search"
   subtitle: ""
   color_scheme: dark
   search_url: https://duckduckgo.com/?q={query}
   redirect_on_no_results: false
 server:
-  address: 127.0.0.1:4435
+  # The Firefox extension posts here by default.
+  address: 127.0.0.1:4433
   database: db.sqlite3
 indexer:
   detect_languages: true
   max_file_size_mb: 5
+  # Files under ~ come after code search works. See ../docs/hister-fork.md.
   directories: []
 semantic_search:
   enable: true
@@ -29,6 +33,10 @@ semantic_search:
   query_prefix: ""
   document_prefix: ""
   similarity_threshold: 0.4
-  result_limit: 100
+  # Filters now apply before ranking, so this no longer has to feed a
+  # filter that runs afterwards.
+  result_limit: 50
+  # The CPU embedder shares 8 CPUs with the VM; past 3 s semsearch warns.
+  query_embedding_timeout: 30
   semantic_weight: 0.5
   max_embedding_concurrency: 2

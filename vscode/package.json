@@ -1,13 +1,13 @@
 {
   "name": "semantic-search",
   "displayName": "Semantic Search",
-  "description": "Semantic search over code through semsearch and the local hister code instance",
+  "description": "Semantic search over code through semsearch and the local hister instance",
   "version": "0.1.0",
   "publisher": "local",
   "private": true,
   "engines": { "vscode": "^1.90.0" },
   "main": "./extension.js",
-  "activationEvents": [],
+  "activationEvents": ["onStartupFinished"],
   "contributes": {
     "commands": [
       { "command": "semanticSearch.code", "title": "Semantic Search: Code" },
@@ -23,6 +23,11 @@
           "type": "string",
           "default": "",
           "description": "Path to semsearch. Empty means the repo's release build, then PATH."
+        },
+        "semanticSearch.watch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Re-index an open folder's code 10 s after a file in it changes."
         }
       }
     }
