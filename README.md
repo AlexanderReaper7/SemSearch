@@ -4,7 +4,7 @@ Local semantic search over the user's code, files and Firefox history. Nothing l
 
 Each source is searched from where it is used. VS Code searches code, Firefox searches web history, and file search has its own entry point. Agents reach all three through a skill. A single query across every source exists but is the rare case.
 
-A prototype runs on three unmodified [hister](https://github.com/asciimoo/hister) instances, one per source. Whether that stays or gets rewritten is the open question in [docs/decisions.md](docs/decisions.md), along with every decision so far and the measurements behind them.
+A prototype runs on three unmodified [hister](https://github.com/asciimoo/hister) instances, one per source. It moves to a hard fork, [AlexanderReaper7/hister](https://github.com/AlexanderReaper7/hister); the plan is [docs/hister-fork.md](docs/hister-fork.md). Every decision so far, and the measurements behind them, are in [docs/decisions.md](docs/decisions.md).
 
 ```sh
 cargo build --release

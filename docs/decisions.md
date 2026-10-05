@@ -96,7 +96,18 @@ Cost: a new date in the embedded text is a re-embed. For code that is one file p
 
 hister embeds a document when it is new, or when an add carries text different from the stored text (`embeddingTextChanged` in `server/indexer/indexer.go`). Title, URL, dates and metadata do not count. The extension submits a page on load, then at most every 30 s while its text keeps changing, and again when the tab is hidden or closed. A revisit with unchanged text costs an index write. A page whose text changes on every load (a clock, a comment count, a live feed) is embedded again on every visit, and every 30 s while it stays open and changing. On the CPU embedder that is the main running cost. No throttle exists in hister; a skip rule per site, or a patch that ignores small changes, are the options if it shows up.
 
-## Open - Build on hister or rewrite
+## 2026-10-05 - Hard fork of hister
+
+The open question below is closed: build on hister, as a hard fork at [AlexanderReaper7/hister](https://github.com/AlexanderReaper7/hister), cloned to `~/Projects/hister`. It starts from upstream `master` at `2ff95bb2`, 47 commits past v0.20.0, and diverges freely. Upstream fixes get cherry-picked by hand when wanted.
+
+The facts on the table when the user chose:
+
+- Upstream moves fast: 42 commits and 125 changed files between `25dccad` and `2ff95bb2`, in about ten days.
+- A thin patch fork's selling point was sending general fixes upstream. Upstream's `CONTRIBUTING.md` says "AI should never be the main author of the PR" and requires human-written issue and PR text, so patches the agent writes cannot go upstream anyway.
+
+First scope, chosen by the user: filters in vector search, and dates in the embedded text of local files. Left out for now: two embedding endpoints (upstream #801 already gives queries their own slots) and a re-embed throttle (no measured cost yet). The plan and its open questions are in [hister-fork.md](hister-fork.md).
+
+## Closed 2026-10-05 - Build on hister or rewrite
 
 hister (Go, AGPL-3.0) covers web history and files: a Firefox extension that captures full page content, a keyword index, file parsers, MCP, a web UI and a TUI. It calls an OpenAI-compatible `/v1/embeddings` endpoint, so it can use `:5002`.
 
