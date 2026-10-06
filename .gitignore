@@ -1,3 +1,4 @@
 /target
 # hister writes its TUI defaults beside whichever config it loads.
 /config/tui.yaml
+__pycache__/
