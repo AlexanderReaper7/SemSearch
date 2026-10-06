@@ -1,6 +1,7 @@
 # semsearch-rerank, the jina-reranker-v3.5 server. `python` must carry a torch
 # that can reach the GPU; nixcfg passes the CUDA interpreter it builds for
-# ComfyUI, so torch is not compiled a second time.
+# ComfyUI, so torch is not compiled a second time. flash-attn takes torch's
+# CUDA capabilities, so it is compiled for the same GPUs only.
 {
   lib,
   python,
@@ -14,6 +15,7 @@ let
     ps.safetensors
     ps.numpy
     ps.tokenizers
+    ps.flash-attn
   ]);
 in
 runCommand "semsearch-rerank"

@@ -1,7 +1,10 @@
 """Peak VRAM of one rerank of 30 pieces of this repository's code, with the
 model's own forward or the server's, and what is live at the peak.
 
-    <reranker's python> rerank/memprofile.py original|fixed <characters per piece> <weights dir>
+    <reranker's python> rerank/memprofile.py original|fixed|flash <characters per piece> <weights dir>
+
+original is the model's own forward with SDPA, fixed the server's forward with
+SDPA, flash the server's forward with flash-attn, as the server runs it.
 
 Run it with the interpreter InferMux runs server.py with, on a card the live
 reranker has been unloaded from (`/warden/unload`). It writes the scores to
@@ -16,7 +19,7 @@ import torch, server
 
 variant, size, M = sys.argv[1], int(sys.argv[2]), Path(sys.argv[3])
 mod = server.modeling(M)
-model = server.load(M, "cuda", mod.JinaForRanking if variant == "original" else server.ranker(mod))
+model = server.load(M, "cuda", mod.JinaForRanking if variant == "original" else server.ranker(mod), "flash_attention_2" if variant == "flash" else "sdpa")
 print("attn implementation:", model.config._attn_implementation)
 
 random.seed(1)
@@ -29,6 +32,17 @@ print("tokens:", sum(len(model._tokenizer(d)["input_ids"]) for d in docs), "char
 
 masks = []
 model.model.layers[0].self_attn.register_forward_pre_hook(lambda m, a, kw: masks.append(None if kw.get("attention_mask") is None else (tuple(kw["attention_mask"].shape), str(kw["attention_mask"].dtype))), with_kwargs=True)
+
+import statistics, time
+with torch.inference_mode():
+    model.rerank(query, docs)  # warm-up: kernels, cuBLAS handles
+    times = []
+    for _ in range(5):
+        torch.cuda.synchronize(); t = time.perf_counter()
+        model.rerank(query, docs)
+        torch.cuda.synchronize(); times.append(time.perf_counter() - t)
+print(f"rerank time, median of 5 after a warm-up: {statistics.median(times):.3f} s (min {min(times):.3f}, max {max(times):.3f})")
+torch.cuda.empty_cache()
 
 torch.cuda.synchronize(); base = torch.cuda.memory_allocated()
 torch.cuda.memory._record_memory_history(max_entries=200000)

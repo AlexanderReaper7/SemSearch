@@ -60,10 +60,15 @@ def ranker(module):
     return Ranker
 
 
-def load(model_dir: Path, device: str, cls=None):
+def load(model_dir: Path, device: str, cls=None, attention=None):
+    """On the GPU, attention runs through flash-attn. 16 of the model's 28
+    layers attend to a 1,024-token window; flash-attn skips what lies outside
+    it, where SDPA built an n x n mask, 1.4 GB for 16k tokens. Without
+    flash-attn this fails rather than fall back to that."""
     cls = cls or ranker(modeling(model_dir))
     dtype = torch.bfloat16 if device == "cuda" else torch.float32
-    return cls.from_pretrained(str(model_dir), dtype=dtype).to(device).eval()
+    attention = attention or ("flash_attention_2" if device == "cuda" else "sdpa")
+    return cls.from_pretrained(str(model_dir), dtype=dtype, attn_implementation=attention).to(device).eval()
 
 
 def main():
@@ -72,14 +77,15 @@ def main():
     p.add_argument("--port", type=int, required=True)
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--device", default="cuda")
-    # 30 code pieces were 26-40k characters and peaked at 2.5 GB of VRAM.
+    # 30 pieces of 2,000 characters, hister's limit, are 60k characters and
+    # peak at 1.8 GB of VRAM with flash-attn.
     p.add_argument("--max-chars", type=int, default=120_000, help="refuse a request whose query and documents are longer")
     args = p.parse_args()
 
     name = args.model.name
     t = time.perf_counter()
     model = load(args.model, args.device)
-    print(f"loaded {name} on {args.device} in {time.perf_counter() - t:.1f} s", file=sys.stderr, flush=True)
+    print(f"loaded {name} on {args.device} with {model.config._attn_implementation} in {time.perf_counter() - t:.1f} s", file=sys.stderr, flush=True)
     gpu = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):

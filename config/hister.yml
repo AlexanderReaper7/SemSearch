@@ -54,7 +54,8 @@ semantic_search:
     enable: true
     endpoint: http://127.0.0.1:5001/v1/rerank
     model: jina-reranker-v3.5
-    # 30 code pieces rerank in 0.5-0.65 s once loaded.
+    # 30 pieces of 900 characters rerank in 0.36 s once loaded, 30 of 2,000 in
+    # 0.89 s (flash-attn, 2026-10-06).
     candidates: 30
     keyword_candidates: 10
     max_document_chars: 2000
