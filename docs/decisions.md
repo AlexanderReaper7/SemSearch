@@ -179,6 +179,10 @@ The user chose: column 1 as before, and the piece's real column only when an ear
 
 `bench/` measures code search quality, query latency and embedding throughput. The user's choices, each with its reason, are in [bench/README.md](../bench/README.md): a seeded hister of its own rather than the real index, a corpus of the six answer repositories at pinned commits, seeding on the 3080, the relevance rule (implementation, a test that demonstrates it, or text that explains it), and queries written by the agent and reviewed by Codex. The first results are in `bench/results/`.
 
+## 2026-10-06 - The VS Code search runs as the user types
+
+The user's choices: search from the second letter, 300 ms after the last keystroke, and rerank every query. A query takes about 0.9 s (bench latency median), so several can be in flight. The user's rule for them: keep the oldest, which will answer soonest, and the newest, and kill every one between. A result older than the one shown is dropped, and the title names the query a stale result belongs to. VS Code reorders quick pick items by its own match score unless `sortByLabel` is false, a proposed API whose setter works in 1.137 (probed live); every item has `alwaysShow`, so none is hidden for not matching the typed text. Tests: `node --test vscode/test/*.test.js`.
+
 ## Closed 2026-10-05 - Build on hister or rewrite
 
 hister (Go, AGPL-3.0) covers web history and files: a Firefox extension that captures full page content, a keyword index, file parsers, MCP, a web UI and a TUI. It calls an OpenAI-compatible `/v1/embeddings` endpoint, so it can use `:5002`.

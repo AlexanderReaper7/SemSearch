@@ -1,4 +1,5 @@
-// Asks semsearch for hits and lists them in a quick pick. Code hits carry a
+// Asks semsearch for hits as the user types and lists them in a quick pick,
+// from the second letter, 300 ms after the last key. Code hits carry a
 // `vscode://file/<path>:<line>:<column>` URL and open there; web and file hits
 // open in the default handler.
 //
@@ -18,15 +19,17 @@ function binary() {
   return fs.existsSync(build) ? build : 'semsearch';
 }
 
+// One semsearch process: its handle, to kill it, and its outcome. A slow
+// search or a fallback to keyword hits is reported on stderr, as `warning`.
 function search(source, query) {
-  return new Promise((resolve, reject) => {
-    execFile(binary(), ['search', '--json', '-s', source, '-n', '30', query], { maxBuffer: 16 << 20 }, (err, stdout, stderr) => {
-      if (err) return reject(new Error(stderr || err.message));
-      // A slow search or a fallback to keyword hits is reported on stderr.
-      if (stderr.trim()) vscode.window.showWarningMessage(stderr.trim());
-      resolve(stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line)));
+  let child;
+  const done = new Promise((resolve, reject) => {
+    child = execFile(binary(), ['search', '--json', '-s', source, '-n', '30', query], { maxBuffer: 16 << 20 }, (err, stdout, stderr) => {
+      if (err) return reject(Object.assign(new Error(stderr || err.message), { killed: err.killed }));
+      resolve({ hits: stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line)), warning: stderr.trim() });
     });
   });
+  return { child, done };
 }
 
 // Unix seconds -> `2026-09-22 14:03` in local time.
@@ -51,30 +54,89 @@ async function open(hit) {
   await vscode.window.showTextDocument(doc, { selection: new vscode.Range(pos, pos) });
 }
 
-async function run(source) {
-  const query = await vscode.window.showInputBox({ prompt: `Semantic search (${source})`, ignoreFocusOut: true });
-  if (!query) return;
-  let hits;
+const MIN_LETTERS = 2;
+const DEBOUNCE_MS = 300;
+
+function item(hit) {
+  return {
+    label: hit.title || hit.url,
+    // Rerank score, then similarity, as on the command line.
+    description: `${hit.rerank_score == null ? '-' : hit.rerank_score.toFixed(3)} ${hit.similarity == null ? 'kw' : hit.similarity.toFixed(3)}  ${hit.source}  ${date(hit.updated)}`,
+    detail: hit.chunk.replace(/\s+/g, ' ').slice(0, 200),
+    // The list is semsearch's order for the text, not a filter of it.
+    alwaysShow: true,
+    hit,
+  };
+}
+
+// Searches run as the text changes. While some are running, the oldest is
+// kept, since it should answer first and fill the list meanwhile, and so is
+// the newest; any between them are killed (the user, 2026-10-06). A result
+// older than the one shown is dropped.
+function run(source) {
+  const pick = vscode.window.createQuickPick();
+  pick.placeholder = `Semantic search (${source}), from ${MIN_LETTERS} letters`;
+  pick.matchOnDescription = false;
+  pick.matchOnDetail = false;
+  // VS Code otherwise moves items whose label matches the typed text to the
+  // top. A proposed API in 1.137; when the host refuses it, the order can
+  // still change where a label matches.
   try {
-    hits = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Window, title: 'Semantic search' },
-      () => search(source, query),
-    );
-  } catch (e) {
-    return vscode.window.showErrorMessage(`semsearch: ${e.message}`);
-  }
-  if (hits.length === 0) return vscode.window.showInformationMessage('No semantic hits.');
-  const picked = await vscode.window.showQuickPick(
-    hits.map((hit) => ({
-      label: hit.title || hit.url,
-      // Rerank score, then similarity, as on the command line.
-      description: `${hit.rerank_score == null ? '-' : hit.rerank_score.toFixed(3)} ${hit.similarity == null ? 'kw' : hit.similarity.toFixed(3)}  ${hit.source}  ${date(hit.updated)}`,
-      detail: hit.chunk.replace(/\s+/g, ' ').slice(0, 200),
-      hit,
-    })),
-    { matchOnDescription: true, matchOnDetail: true, placeHolder: query },
-  );
-  if (picked) await open(picked.hit);
+    pick.sortByLabel = false;
+  } catch {}
+
+  let timer = null;
+  let seq = 0;
+  let shown = 0;
+  let flights = [];
+
+  const busy = () => (pick.busy = flights.length > 0);
+  const launch = (text) => {
+    const flight = { seq: ++seq, text, ...search(source, text) };
+    flights.push(flight);
+    for (const between of flights.slice(1, -1)) between.child.kill();
+    flights = flights.length > 2 ? [flights[0], flights[flights.length - 1]] : flights;
+    busy();
+    flight.done.then(
+      ({ hits, warning }) => {
+        if (flight.seq < shown) return;
+        shown = flight.seq;
+        pick.items = hits.map(item);
+        const stale = flight.text !== pick.value.trim() ? `for "${flight.text}"` : '';
+        pick.title = [stale, warning, hits.length === 0 ? 'no hits' : ''].filter(Boolean).join('  ') || undefined;
+      },
+      (e) => {
+        if (!e.killed && flight.seq > shown) pick.title = `semsearch: ${e.message}`;
+      },
+    ).finally(() => {
+      flights = flights.filter((f) => f !== flight);
+      busy();
+    });
+  };
+
+  pick.onDidChangeValue((value) => {
+    clearTimeout(timer);
+    const text = value.trim();
+    if (text.length < MIN_LETTERS) return;
+    timer = setTimeout(() => launch(text), DEBOUNCE_MS);
+  });
+  pick.onDidAccept(() => {
+    const [chosen] = pick.activeItems;
+    if (chosen) {
+      pick.hide();
+      return open(chosen.hit);
+    }
+    // Enter before the pause ends searches at once.
+    clearTimeout(timer);
+    const text = pick.value.trim();
+    if (text.length >= MIN_LETTERS) launch(text);
+  });
+  pick.onDidHide(() => {
+    clearTimeout(timer);
+    flights.forEach((f) => f.child.kill());
+    pick.dispose();
+  });
+  pick.show();
 }
 
 // Changes under these never change what code search sees: .gitignore keeps
