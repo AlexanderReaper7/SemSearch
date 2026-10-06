@@ -19,7 +19,6 @@ import importlib.util
 import json
 import os
 import sys
-import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,10 +26,11 @@ from pathlib import Path
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-# Triton compiles kernels on first use into ~/.triton. InferMux gives its
-# models a writable HOME; anywhere else without one, a temporary directory.
-if not os.access(os.path.expanduser("~"), os.W_OK):
-    os.environ.setdefault("TRITON_CACHE_DIR", tempfile.mkdtemp(prefix="semsearch-rerank-triton-"))
+# torch routes some eager ops, the rotary embedding's fp32 matmul among them,
+# to Triton kernels it compiles into ~/.triton and loads from there. InferMux's
+# cache directory, its models' HOME, is mounted noexec, so the load fails.
+# Without them the scores are identical and as fast (2026-10-06).
+os.environ.setdefault("TORCH_DISABLE_NATIVE_JIT", "1")
 
 import torch  # noqa: E402
 
