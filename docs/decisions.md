@@ -145,6 +145,8 @@ On six queries with known answers in teaterihuskvarna, reranking the top 30 move
 
 In hister: `semantic_search.rerank` in the config. Results gain `reranked` (doc_id, url, rerank_score, best first) and `rerank_error`. A semantic hit is read by its best body chunk, never by its metadata chunk; a keyword hit by the start of its text; each with its title, cut at 2000 characters. Only the first page of a relevance-sorted search is reranked. Any failure leaves the results in their old order and says why.
 
+VRAM, profiled 2026-10-06 with `rerank/memprofile.py` (30 pieces of this repository's code, 16,115 tokens at the 2,000-character cut): the model's own forward kept all 29 layers' hidden states and used the last, 33.5 MiB per layer. `server.py` replaces it with one that keeps the last only; the scores are bit-identical. Peak reserved fell from 4,122 to 3,058 MiB, and from 2,172 to 1,824 MiB at 900 characters a piece; the CUDA context adds about 0.7 GB on top in nvidia-smi. Of the 1,702 MiB a worst-case rerank still allocates above the weights, 1,400 MiB is the attention mask: 16 of the 28 layers use a 1,024-token sliding window (Jina's config), transformers builds that mask as a full n × n matrix (280 MiB as bool), and SDPA turns it into two n × n bf16 tensors (560 MiB each).
+
 The query embedding, not the reranker, is the slow part today: 2.7-3.0 s on the CPU embedder under load on 2026-10-06, against 0.09 s on 2026-09-26.
 
 ## 2026-10-06 - The embedder moves to the zbox's GPU

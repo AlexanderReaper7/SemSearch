@@ -35,12 +35,35 @@ os.environ.setdefault("TORCH_DISABLE_NATIVE_JIT", "1")
 import torch  # noqa: E402
 
 
-def load(model_dir: Path, device: str):
+def modeling(model_dir: Path):
     spec = importlib.util.spec_from_file_location("jina_modeling", model_dir / "modeling.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def ranker(module):
+    """The model's JinaForRanking with a forward that keeps only the last
+    layer's hidden states. The original asks for all 29 layers' and uses the
+    last, which held about 1 GB of VRAM for 30 pieces of 2,000 characters.
+    The scores are the same computation, so the same numbers."""
+
+    class Ranker(module.JinaForRanking):
+        def forward(self, input_ids, attention_mask=None, **_):
+            hidden = self.model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False).last_hidden_state
+            batch, _, dim = hidden.shape
+            docs = self.projector(hidden[input_ids == self.doc_embed_token_id].view(batch, -1, dim))
+            query = self.projector(hidden[input_ids == self.query_embed_token_id].unsqueeze(1))
+            scores = torch.nn.functional.cosine_similarity(docs, query.expand_as(docs), dim=-1).squeeze(-1)
+            return module.CausalLMOutputWithScores(scores=scores, query_embeds=query, doc_embeds=docs)
+
+    return Ranker
+
+
+def load(model_dir: Path, device: str, cls=None):
+    cls = cls or ranker(modeling(model_dir))
     dtype = torch.bfloat16 if device == "cuda" else torch.float32
-    return module.JinaForRanking.from_pretrained(str(model_dir), dtype=dtype).to(device).eval()
+    return cls.from_pretrained(str(model_dir), dtype=dtype).to(device).eval()
 
 
 def main():
