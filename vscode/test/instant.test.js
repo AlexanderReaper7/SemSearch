@@ -27,7 +27,11 @@ const fakeVscode = {
     },
     showWarningMessage() {}, showErrorMessage() {},
   },
-  workspace: { getConfiguration: () => ({ get: (k) => (k === 'binary' ? path.join(__dirname, 'fake-semsearch.js') : false) }) },
+  workspace: {
+    getConfiguration: () => ({ get: (k) => (k === 'binary' ? path.join(__dirname, 'fake-semsearch.js') : false) }),
+    workspaceFolders: [{ uri: { fsPath: '/x' } }, { uri: { fsPath: '/y' } }],
+    asRelativePath: (file) => file.replace(/^\/x\//, ''),
+  },
   commands: { registerCommand: (id, fn) => (commands[id] = fn) },
 };
 const commands = {};
@@ -59,7 +63,7 @@ test('one letter does not search, two do after the pause', async () => {
   assert.deepStrictEqual(fs.readFileSync(log, 'utf8'), '', 'nothing before 300 ms');
   await sleep(300);
   assert.deepStrictEqual(events(), ['start ab', 'end ab']);
-  assert.strictEqual(pick.items[0].label, 'ab');
+  assert.strictEqual(pick.items[0].label, 'ab:1');
   assert.strictEqual(pick.title, undefined);
 });
 
@@ -82,7 +86,7 @@ test('the oldest and the newest search keep running, the ones between are killed
   assert.ok(ev.includes('end q1@1500'), ev.join(', '));
   assert.ok(!ev.includes('end q2@1500') && !ev.includes('end q3@1500'), ev.join(', '));
   assert.ok(ev.includes('end q4@200'), ev.join(', '));
-  assert.strictEqual(pick.items[0].label, 'q4@200');
+  assert.strictEqual(pick.items[0].label, 'q4@200:1');
 });
 
 test('a late answer for older text does not replace a newer one', async () => {
@@ -90,10 +94,10 @@ test('a late answer for older text does not replace a newer one', async () => {
   await sleep(400);
   type('new@100');
   await sleep(600);
-  assert.strictEqual(pick.items[0].label, 'new@100');
+  assert.strictEqual(pick.items[0].label, 'new@100:1');
   await sleep(1200);
   assert.ok(events().includes('end old@1500'));
-  assert.strictEqual(pick.items[0].label, 'new@100');
+  assert.strictEqual(pick.items[0].label, 'new@100:1');
 });
 
 test('the oldest answer shows while the newest runs', async () => {
@@ -101,9 +105,23 @@ test('the oldest answer shows while the newest runs', async () => {
   await sleep(400);
   type('second@1500');
   await sleep(700);
-  assert.strictEqual(pick.items[0].label, 'first@600');
+  assert.strictEqual(pick.items[0].label, 'first@600:1');
   assert.strictEqual(pick.busy, true);
   await sleep(1500);
-  assert.strictEqual(pick.items[0].label, 'second@1500');
+  assert.strictEqual(pick.items[0].label, 'second@1500:1');
   assert.strictEqual(pick.busy, false);
+});
+
+test('code search covers the open folders', async () => {
+  type('ab');
+  await sleep(600);
+  const args = JSON.parse(fs.readFileSync(`${log}.args`, 'utf8'));
+  assert.deepStrictEqual(args.slice(-6), ['--in', '/x', '--in', '/y', '--', 'ab']);
+});
+
+test('one item per file, at its best piece, labelled by its path and line', async () => {
+  type('ab#files');
+  await sleep(600);
+  assert.deepStrictEqual(pick.items.map((i) => i.label), ['a.rs:10', 'b.rs:2']);
+  assert.deepStrictEqual(pick.items.map((i) => i.description), ['', '']);
 });

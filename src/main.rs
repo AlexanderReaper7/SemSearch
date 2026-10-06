@@ -88,6 +88,10 @@ enum Command {
         /// Only hits last visited or changed before this. Same forms as --since.
         #[arg(long)]
         before: Option<String>,
+        /// Only code under this directory, such as the checkout being worked
+        /// in. Repeat for several. Its worktrees are other directories.
+        #[arg(long = "in", value_name = "DIR")]
+        under: Vec<PathBuf>,
         #[arg(required = true, num_args = 1..)]
         query: Vec<String>,
     },
@@ -105,7 +109,7 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::IndexCode { roots } => code::index(&roots),
         Command::ImportHistory { places } => history::import(&places),
-        Command::Search { source, limit, json, since, before, query } => {
+        Command::Search { source, limit, json, since, before, under, query } => {
             let since = since.as_deref().map(time::parse_bound).transpose()?;
             let before = before.as_deref().map(time::parse_bound).transpose()?;
             let source = match source {
@@ -114,7 +118,14 @@ fn main() -> Result<()> {
                 SourceArg::Code => Some(Source::Code),
                 SourceArg::All => None,
             };
-            let query = query.join(" ");
+            let mut query = query.join(" ");
+            if !under.is_empty() {
+                if !matches!(source, Some(Source::Code)) {
+                    anyhow::bail!("--in applies to code only, use --source code");
+                }
+                let under = under.iter().map(std::path::absolute).collect::<std::io::Result<Vec<_>>>()?;
+                query = format!("{} {query}", code::under(&under));
+            }
             let hits = hister::search(source, &hister::Search { query: &query, since, before })?;
             for hit in hits.into_iter().take(limit) {
                 if json {

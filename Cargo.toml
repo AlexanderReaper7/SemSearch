@@ -33,3 +33,6 @@ ureq = { version = "3.4", features = ["json"] }
 opt-level = 3
 lto = true
 codegen-units = 1
+
+[dev-dependencies]
+regex = "1.13.1"

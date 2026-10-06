@@ -93,8 +93,23 @@ fn dirty(repo: &Path) -> HashSet<PathBuf> {
 }
 
 fn url(path: &Path, line: usize, column: usize) -> String {
-    // Only the space needs escaping in practice: `~/Projects/linux transition`.
-    format!("vscode://file{}:{line}:{column}", path.display().to_string().replace('%', "%25").replace(' ', "%20"))
+    format!("vscode://file{}:{line}:{column}", encode(path))
+}
+
+// Only the space needs escaping in practice: `~/Projects/linux transition`.
+fn encode(path: &Path) -> String {
+    path.display().to_string().replace('%', "%25").replace(' ', "%20")
+}
+
+/// A hister query filter for the pieces under any of `dirs`, which are
+/// absolute: a `url_re` on the start of their URLs. A directory matches only
+/// itself, so `repo` leaves out its worktree `repo-branch`.
+pub fn under(dirs: &[PathBuf]) -> String {
+    // hister's regular expressions are Go's, where a backslash before any
+    // ASCII punctuation is a literal.
+    let escape = |s: String| s.chars().map(|c| if c.is_ascii_punctuation() && c != '/' { format!("\\{c}") } else { c.to_string() }).collect::<String>();
+    let dirs: Vec<String> = dirs.iter().map(|d| escape(encode(&d.components().collect::<PathBuf>()))).collect();
+    format!("url_re:\"vscode://file({})/.*\"", dirs.join("|"))
 }
 
 /// Each piece's URL, which is its identity in hister. A piece is named by its
@@ -240,6 +255,23 @@ fn save(path: &Path, state: &State) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The filter as hister applies it: the whole URL must match.
+    fn matches(filter: &str, url: &str) -> bool {
+        let re = filter.strip_prefix("url_re:\"").unwrap().strip_suffix('"').unwrap();
+        regex::Regex::new(&format!("^(?:{re})$")).unwrap().is_match(url)
+    }
+
+    #[test]
+    fn under_keeps_a_checkout_and_leaves_out_its_worktrees() {
+        let filter = under(&[PathBuf::from("/p/repo/"), PathBuf::from("/p/linux (old) v1.2+")]);
+        for path in ["/p/repo/a.rs", "/p/repo/src/b.rs", "/p/linux (old) v1.2+/c.rs"] {
+            assert!(matches(&filter, &url(Path::new(path), 3, 1)), "{path} under {filter}");
+        }
+        for path in ["/p/repo-branch/a.rs", "/p/repo.rs", "/p/other/repo/a.rs", "/p/linux (old) v1x2+/c.rs"] {
+            assert!(!matches(&filter, &url(Path::new(path), 3, 1)), "{path} not under {filter}");
+        }
+    }
 
     #[test]
     fn pieces_on_one_line_get_their_own_urls() {

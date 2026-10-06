@@ -21,10 +21,15 @@ function binary() {
 
 // One semsearch process: its handle, to kill it, and its outcome. A slow
 // search or a fallback to keyword hits is reported on stderr, as `warning`.
+// Code search covers the open folders, not their worktrees or the other
+// repositories (the user, 2026-10-06); with no folder open, all code.
 function search(source, query) {
+  const args = ['search', '--json', '-s', source, '-n', '50'];
+  if (source === 'code') for (const folder of vscode.workspace.workspaceFolders || []) args.push('--in', folder.uri.fsPath);
+  args.push('--', query);
   let child;
   const done = new Promise((resolve, reject) => {
-    child = execFile(binary(), ['search', '--json', '-s', source, '-n', '30', query], { maxBuffer: 16 << 20 }, (err, stdout, stderr) => {
+    child = execFile(binary(), args, { maxBuffer: 16 << 20 }, (err, stdout, stderr) => {
       if (err) return reject(Object.assign(new Error(stderr || err.message), { killed: err.killed }));
       resolve({ hits: stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line)), warning: stderr.trim() });
     });
@@ -58,15 +63,24 @@ const MIN_LETTERS = 2;
 const DEBOUNCE_MS = 300;
 
 function item(hit) {
+  const loc = codeLocation(hit.url);
   return {
-    label: hit.title || hit.url,
-    // Rerank score, then similarity, as on the command line.
-    description: `${hit.rerank_score == null ? '-' : hit.rerank_score.toFixed(3)} ${hit.similarity == null ? 'kw' : hit.similarity.toFixed(3)}  ${hit.source}  ${date(hit.updated)}`,
+    label: loc ? `${vscode.workspace.asRelativePath(loc.file)}:${loc.line}` : hit.title || hit.url,
+    description: date(hit.updated),
     detail: hit.chunk.replace(/\s+/g, ' ').slice(0, 200),
     // The list is semsearch's order for the text, not a filter of it.
     alwaysShow: true,
     hit,
   };
+}
+
+// One item per file, at its best piece; hits come best first.
+function perFile(hits) {
+  const seen = new Set();
+  return hits.filter((hit) => {
+    const key = codeLocation(hit.url)?.file ?? hit.url;
+    return !seen.has(key) && seen.add(key);
+  });
 }
 
 // Searches run as the text changes. While some are running, the oldest is
@@ -101,7 +115,7 @@ function run(source) {
       ({ hits, warning }) => {
         if (flight.seq < shown) return;
         shown = flight.seq;
-        pick.items = hits.map(item);
+        pick.items = perFile(hits).map(item);
         pick.title = [warning, hits.length === 0 ? 'no hits' : ''].filter(Boolean).join('  ') || undefined;
       },
       (e) => {

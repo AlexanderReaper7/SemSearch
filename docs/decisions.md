@@ -183,6 +183,14 @@ The user chose: column 1 as before, and the piece's real column only when an ear
 
 The user's choices: search from the second letter, 300 ms after the last keystroke, and rerank every query. A query takes about 0.9 s (bench latency median), so several can be in flight. The user's rule for them: keep the oldest, which will answer soonest, and the newest, and kill every one between. A result older than the one shown is dropped. The title does not name the query a stale result belongs to (the user, 2026-10-06). VS Code reorders quick pick items by its own match score unless `sortByLabel` is false, a proposed API whose setter works in 1.137 (probed live); every item has `alwaysShow`, so none is hidden for not matching the typed text. Tests: `node --test vscode/test/*.test.js`.
 
+## 2026-10-06 - Code pieces get no metadata vector
+
+hister embeds every document twice, as its body and as a metadata chunk of title, date, type and URL. For a code piece the title is `<repo>/<path>:<line>`, so every piece of `documents.jte` had a vector that said little more than "documents", and a search for "original customer document" scoped to one checkout returned 19 metadata chunks among its 30 hits. The fork leaves the metadata vector out for code (`BodyOnly`, hister 5b0b0e6d); the body chunks still carry the title and date. Measured on the seeded instance with the 20,509 code metadata chunks deleted and the bodies unchanged: final hit@1 10 → 12, hit@10 20 → 21, MRR 0.509 → 0.559, implementation only MRR 0.338 → 0.379. One query lost (failover-next-host 2 → 4), five gained, rerank-candidates went from not found to first (`bench/results/2026-10-06-203212-quality.json`). The user chose this over hiding those hits in the extension, which would have left them taking places in the 50.
+
+## 2026-10-06 - VS Code searches the open checkout only
+
+The user: code search in VS Code covers the open folder, not the other repositories and not the folder's worktrees. `semsearch search --in <dir>` adds a `url_re` filter on the start of the pieces' URLs, and `<dir>/` only, so `repo` leaves out `repo-branch`; the extension passes every open folder, and nothing with no folder open. Scoping also helps rank: the filter applies before the vector search, so the 50 candidates all come from the checkout instead of five copies of one file from its worktrees. The quick pick shows one item per file at its best piece, labelled by its path in the folder and its line, with the date as its description; scores and source are gone.
+
 ## Closed 2026-10-05 - Build on hister or rewrite
 
 hister (Go, AGPL-3.0) covers web history and files: a Firefox extension that captures full page content, a keyword index, file parsers, MCP, a web UI and a TUI. It calls an OpenAI-compatible `/v1/embeddings` endpoint, so it can use `:5002`.
