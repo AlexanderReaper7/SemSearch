@@ -169,6 +169,12 @@ Both run with `--ubatch-size 2048 --parallel 1`. An embedding must fit in one ub
 
 hister now calls `:5001` with the name `Octen-Embedding-4B.Q8_0`. Both are in hister's embedding fingerprint, which would have warned "Run `hister reindex`" on every start. The user chose to keep the index, 84,784 chunks and about 11M tokens (7 h on the zbox), because the GGUF is the same. The stored fingerprint was deleted once and hister stored the new one on its next start (`backfillEmbeddingFingerprint`). The old vectors came from the CPU and from the 3080, which agreed to cosine 0.9997.
 
+## 2026-10-06 - A piece's URL carries its column when its line is taken
+
+A piece of code is a hister document named `vscode://file/<path>:<line>:1`, and hister keys documents by URL. When two pieces of a file start on the same line, the second overwrote the first: 880 of 47,039 pieces in 410 files (178 Java, 85 Go), found by Codex reviewing the benchmark. A piece starts on a taken line when the splitter cuts inside a line, such as a long line or an `impl X {` header.
+
+The user chose: column 1 as before, and the piece's real column only when an earlier piece of the same file starts on its line. Every other URL stays the same, so only the lost pieces and the pieces whose URL now holds different text are embedded again. Rejected: the real column for every piece, which renames every piece that starts on an indented line and re-embeds most of the code. `PIECE_FORMAT` 4 re-adds every file once. The VS Code extension opens a hit at its column.
+
 ## Closed 2026-10-05 - Build on hister or rewrite
 
 hister (Go, AGPL-3.0) covers web history and files: a Firefox extension that captures full page content, a keyword index, file parsers, MCP, a web UI and a TUI. It calls an OpenAI-compatible `/v1/embeddings` endpoint, so it can use `:5002`.

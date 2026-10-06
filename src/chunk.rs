@@ -17,6 +17,8 @@ const SIZE: Range<usize> = 400..3000;
 pub struct Piece {
     /// 1-based line of the first character.
     pub line: usize,
+    /// 1-based column of the first character, in characters.
+    pub column: usize,
     pub text: String,
 }
 
@@ -56,7 +58,9 @@ pub fn split(ext: &str, text: &str) -> Vec<Piece> {
         .map(|(offset, piece)| {
             line += text[counted..offset].matches('\n').count();
             counted = offset;
-            Piece { line, text: piece.to_string() }
+            let line_start = text[..offset].rfind('\n').map_or(0, |i| i + 1);
+            let column = text[line_start..offset].chars().count() + 1;
+            Piece { line, column, text: piece.to_string() }
         })
         .collect()
 }

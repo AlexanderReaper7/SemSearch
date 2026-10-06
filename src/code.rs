@@ -23,7 +23,7 @@ const MAX_FILE_BYTES: u64 = 512 * 1024;
 
 /// Raised whenever what a piece carries changes, so that every file is
 /// re-added once. A re-added piece whose text is unchanged is not re-embedded.
-const PIECE_FORMAT: u32 = 3;
+const PIECE_FORMAT: u32 = 4;
 
 /// Generated files that are text but never what a search is after.
 const SKIP_NAMES: &[&str] = &["Cargo.lock", "flake.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock"];
@@ -92,9 +92,22 @@ fn dirty(repo: &Path) -> HashSet<PathBuf> {
     out.stdout.split(|&b| b == 0).filter(|e| e.len() > 3).map(|e| PathBuf::from(String::from_utf8_lossy(&e[3..]).as_ref())).collect()
 }
 
-fn url(path: &Path, line: usize) -> String {
+fn url(path: &Path, line: usize, column: usize) -> String {
     // Only the space needs escaping in practice: `~/Projects/linux transition`.
-    format!("vscode://file{}:{line}:1", path.display().to_string().replace('%', "%25").replace(' ', "%20"))
+    format!("vscode://file{}:{line}:{column}", path.display().to_string().replace('%', "%25").replace(' ', "%20"))
+}
+
+/// Each piece's URL, which is its identity in hister. A piece is named by its
+/// first line and column 1, or by its real column when an earlier piece of the
+/// file starts on the same line: with column 1 for both, the second overwrote
+/// the first (880 of 47,039 pieces on 2026-10-06). Column 1 otherwise keeps
+/// the URLs of every other piece as they were, so they are not re-embedded.
+fn piece_urls(path: &Path, pieces: &[chunk::Piece]) -> Vec<String> {
+    let mut lines = HashSet::new();
+    pieces
+        .iter()
+        .map(|p| if lines.insert(p.line) { url(path, p.line, 1) } else { url(path, p.line, p.column) })
+        .collect()
 }
 
 pub fn index(roots: &[PathBuf]) -> Result<()> {
@@ -164,13 +177,9 @@ pub fn index(roots: &[PathBuf]) -> Result<()> {
 
             let rel = rel_path.display().to_string();
             let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
-            let mut urls = Vec::new();
-            for piece in chunk::split(&ext, &text) {
-                if piece.text.trim().is_empty() {
-                    continue;
-                }
-                let u = url(path, piece.line);
-                urls.push(u.clone());
+            let pieces: Vec<chunk::Piece> = chunk::split(&ext, &text).into_iter().filter(|p| !p.text.trim().is_empty()).collect();
+            let urls = piece_urls(path, &pieces);
+            for (piece, u) in pieces.into_iter().zip(urls.iter().cloned()) {
                 docs.push(hister::Doc {
                     url: u,
                     title: format!("{name}/{rel}:{}", piece.line),
@@ -226,4 +235,36 @@ fn save(path: &Path, state: &State) -> Result<()> {
     std::fs::write(&tmp, serde_json::to_vec(state)?)?;
     std::fs::rename(tmp, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pieces_on_one_line_get_their_own_urls() {
+        // One 8,000-character line is cut into several pieces, all on line 1.
+        let text = "word ".repeat(1600);
+        let pieces = chunk::split("txt", &text);
+        assert!(pieces.len() > 1);
+        assert!(pieces.iter().all(|p| p.line == 1));
+        let urls = piece_urls(Path::new("/p/a.txt"), &pieces);
+        assert_eq!(urls[0], "vscode://file/p/a.txt:1:1");
+        assert_eq!(urls.iter().collect::<HashSet<_>>().len(), urls.len());
+        // The column is where the piece starts, so the editor opens there.
+        for (p, u) in pieces.iter().zip(&urls).skip(1) {
+            assert_eq!(*u, format!("vscode://file/p/a.txt:1:{}", p.column));
+            assert_eq!(&text[..].chars().skip(p.column - 1).take(10).collect::<String>(), &p.text.chars().take(10).collect::<String>());
+        }
+    }
+
+    #[test]
+    fn a_piece_alone_on_its_line_keeps_column_one() {
+        let text = "fn a() {\n    one();\n}\n\nfn b() {\n    two();\n}\n".repeat(60);
+        let pieces = chunk::split("rs", &text);
+        let lines: HashSet<usize> = pieces.iter().map(|p| p.line).collect();
+        assert_eq!(lines.len(), pieces.len());
+        let urls = piece_urls(Path::new("/p/a.rs"), &pieces);
+        assert!(urls.iter().all(|u| u.ends_with(":1")));
+    }
 }

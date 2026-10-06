@@ -1,5 +1,5 @@
 // Asks semsearch for hits and lists them in a quick pick. Code hits carry a
-// `vscode://file/<path>:<line>:1` URL and open at that line; web and file hits
+// `vscode://file/<path>:<line>:<column>` URL and open there; web and file hits
 // open in the default handler.
 //
 // While a folder is open, a change to a file in it re-indexes that folder, so
@@ -37,17 +37,17 @@ function date(unix) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-// vscode://file/home/x/a b.rs:12:1 -> { file: '/home/x/a b.rs', line: 12 }
+// vscode://file/home/x/a b.rs:12:5 -> { file: '/home/x/a b.rs', line: 12, column: 5 }
 function codeLocation(url) {
-  const m = /^vscode:\/\/file(\/.*):(\d+):\d+$/.exec(url);
-  return m && { file: decodeURIComponent(m[1]), line: Number(m[2]) };
+  const m = /^vscode:\/\/file(\/.*):(\d+):(\d+)$/.exec(url);
+  return m && { file: decodeURIComponent(m[1]), line: Number(m[2]), column: Number(m[3]) };
 }
 
 async function open(hit) {
   const loc = codeLocation(hit.url);
   if (!loc) return vscode.env.openExternal(vscode.Uri.parse(hit.url));
   const doc = await vscode.workspace.openTextDocument(loc.file);
-  const pos = new vscode.Position(loc.line - 1, 0);
+  const pos = new vscode.Position(loc.line - 1, loc.column - 1);
   await vscode.window.showTextDocument(doc, { selection: new vscode.Range(pos, pos) });
 }
 
