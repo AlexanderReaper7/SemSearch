@@ -67,7 +67,8 @@ async function run(source) {
   const picked = await vscode.window.showQuickPick(
     hits.map((hit) => ({
       label: hit.title || hit.url,
-      description: `${hit.similarity == null ? 'kw' : hit.similarity.toFixed(3)}  ${hit.source}  ${date(hit.updated)}`,
+      // Rerank score, then similarity, as on the command line.
+      description: `${hit.rerank_score == null ? '-' : hit.rerank_score.toFixed(3)} ${hit.similarity == null ? 'kw' : hit.similarity.toFixed(3)}  ${hit.source}  ${date(hit.updated)}`,
       detail: hit.chunk.replace(/\s+/g, ' ').slice(0, 200),
       hit,
     })),

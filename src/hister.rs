@@ -118,8 +118,10 @@ pub fn get(server: &str, urls: &[String]) -> Result<Vec<Option<Value>>> {
 #[derive(Serialize, Debug)]
 pub struct Hit {
     pub source: &'static str,
-    /// Cosine similarity, or None for a keyword hit shown because the
-    /// semantic search failed.
+    /// The reranker's score. None when reranking is off or failed, or for a
+    /// hit past the reranked candidates.
+    pub rerank_score: Option<f64>,
+    /// Cosine similarity, or None for a keyword hit.
     pub similarity: Option<f64>,
     pub url: String,
     pub title: String,
@@ -129,6 +131,8 @@ pub struct Hit {
     pub updated: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visits: Option<u64>,
+    #[serde(skip)]
+    doc_id: String,
 }
 
 #[derive(Deserialize)]
@@ -139,6 +143,16 @@ struct SearchResponse {
     documents: Option<Vec<Value>>,
     /// Set by the fork when the query embedding or the vector search failed.
     semantic_error: Option<String>,
+    /// The best keyword and semantic hits in the reranker's order.
+    reranked: Option<Vec<Reranked>>,
+    rerank_error: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Reranked {
+    doc_id: String,
+    url: String,
+    rerank_score: f64,
 }
 
 #[derive(Deserialize)]
@@ -159,10 +173,14 @@ pub struct Search<'a> {
     pub before: Option<i64>,
 }
 
-/// Semantic hits, from one source or, with `source` None, from all of them.
-/// All sources live in one instance, so a source is a type filter. If the
-/// semantic search failed, the keyword hits are returned instead, without a
-/// similarity, so a degraded search still shows something.
+/// Hits from one source or, with `source` None, from all of them. All
+/// sources live in one instance, so a source is a type filter.
+///
+/// The reranker's order comes first: the best keyword and semantic hits
+/// together. The semantic hits it did not see follow, by similarity. Without
+/// a rerank the order is by similarity alone, and if the semantic search
+/// failed too, the keyword hits are returned without a similarity, so a
+/// degraded search still shows something.
 pub fn search(source: Option<Source>, s: &Search) -> Result<Vec<Hit>> {
     let server = server();
     let text = match source {
@@ -190,28 +208,56 @@ pub fn search(source: Option<Source>, s: &Search) -> Result<Vec<Hit>> {
         eprintln!("semsearch: search took {:.1} s", took.as_secs_f64());
     }
     let keyword = body.documents.unwrap_or_default();
-    if let Some(err) = body.semantic_error {
+    let keyword_doc = |url: &str| keyword.iter().find(|d| d["url"].as_str() == Some(url));
+    if let Some(err) = &body.semantic_error {
         eprintln!("semsearch: semantic search failed, showing keyword hits: {err}");
-        return Ok(keyword.iter().map(|d| hit(None, d, d["url"].as_str().unwrap_or_default(), String::new())).collect());
     }
-    let mut hits: Vec<Hit> = body
+    if let Some(err) = &body.rerank_error {
+        eprintln!("semsearch: reranking failed, ordering by similarity: {err}");
+    }
+
+    let mut semantic: Vec<Hit> = body
         .semantic_hits
         .unwrap_or_default()
         .into_iter()
         .map(|h| {
             let url = h.document.as_ref().and_then(|d| d["url"].as_str()).unwrap_or(&h.doc_id).to_string();
-            let doc = h.document.as_ref().or_else(|| keyword.iter().find(|d| d["url"].as_str() == Some(&url)));
-            hit(Some(h.similarity), doc.unwrap_or(&Value::Null), &url, h.matched_chunk)
+            let doc = h.document.as_ref().or_else(|| keyword_doc(&url));
+            hit(Some(h.similarity), doc.unwrap_or(&Value::Null), &url, h.matched_chunk, &h.doc_id)
         })
         .collect();
-    hits.sort_by(|a, b| b.similarity.unwrap_or(-1.0).total_cmp(&a.similarity.unwrap_or(-1.0)));
+    semantic.sort_by(|a, b| b.similarity.unwrap_or(-1.0).total_cmp(&a.similarity.unwrap_or(-1.0)));
+
+    let reranked = body.reranked.unwrap_or_default();
+    if reranked.is_empty() {
+        if body.semantic_error.is_some() {
+            return Ok(keyword.iter().map(|d| hit(None, d, d["url"].as_str().unwrap_or_default(), String::new(), "")).collect());
+        }
+        return Ok(semantic);
+    }
+    let mut hits = Vec::with_capacity(reranked.len() + semantic.len());
+    for r in &reranked {
+        let mut h = match semantic.iter().position(|h| h.doc_id == r.doc_id) {
+            Some(i) => semantic.remove(i),
+            None => {
+                let doc = keyword_doc(&r.url).cloned().unwrap_or(Value::Null);
+                let fragment = doc["text"].as_str().unwrap_or_default().to_string();
+                hit(None, &doc, &r.url, fragment, &r.doc_id)
+            }
+        };
+        h.rerank_score = Some(r.rerank_score);
+        hits.push(h);
+    }
+    hits.extend(semantic);
     Ok(hits)
 }
 
-fn hit(similarity: Option<f64>, doc: &Value, url: &str, chunk: String) -> Hit {
+fn hit(similarity: Option<f64>, doc: &Value, url: &str, chunk: String, doc_id: &str) -> Hit {
     Hit {
         source: Source::of_type(doc["type"].as_u64()).map_or("unknown", Source::name),
+        rerank_score: None,
         similarity,
+        doc_id: doc_id.to_string(),
         title: doc["title"].as_str().unwrap_or("").to_string(),
         added: doc["added"].as_i64().unwrap_or(0),
         updated: doc["updated"].as_i64().unwrap_or(0),

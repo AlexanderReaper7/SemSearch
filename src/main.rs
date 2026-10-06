@@ -121,9 +121,12 @@ fn main() -> Result<()> {
                     println!("{}", serde_json::to_string(&hit)?);
                 } else {
                     let visits = hit.visits.map(|n| format!("  ({n} visits)")).unwrap_or_default();
-                    let score = hit.similarity.map_or("  kw ".to_string(), |s| format!("{s:.3}"));
+                    // Rerank score, then similarity. "-" is a hit the
+                    // reranker did not see, "kw" a keyword hit.
+                    let rerank = hit.rerank_score.map_or("  -  ".to_string(), |s| format!("{s:5.3}"));
+                    let similarity = hit.similarity.map_or("  kw ".to_string(), |s| format!("{s:.3}"));
                     println!(
-                        "{score}  [{}]  {}  {}\n       {}{visits}",
+                        "{rerank} {similarity}  [{}]  {}  {}\n             {}{visits}",
                         hit.source,
                         time::short(hit.updated),
                         hit.url,

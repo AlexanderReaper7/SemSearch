@@ -118,6 +118,35 @@ The user put code search first and files under `~` second, and chose:
 - **Freshness**: a systemd timer runs `index-code` for normal use, and the VS Code extension re-indexes the open project when a file in it changes.
 - **Query embedding**: warn past 3 s, give up at 30 s, and show what was found by then. In practice that means keyword hits when the semantic part fails.
 
+## 2026-10-06 - Reranking with jina-reranker-v3.5
+
+The live test on teaterihuskvarna showed the problem: for "booking a volunteer shift that has no places left", the answer (`ShiftService.java:99`) ranked 17th by similarity, under pieces of the same file that matched only through their metadata chunk.
+
+The user chose:
+
+- **jina-reranker-v3.5** (2026-07-14, 0.6B, Qwen3-0.6B base, multilingual, listwise, CC BY-NC 4.0), over Qwen3-Reranker (2025, runs in llama-server today) and CLM-v0.1-8B (a verifier for agent actions, not a document reranker).
+- **Reranking in the hister fork**, so the web UI, the Firefox extension's search and semsearch all get it.
+- **An InferMux model on the RTX 3080, one model at a time**: a rerank evicts a loaded chat model, and a chat request evicts the reranker. Chosen over keeping it resident (chat models lose about 2.5 GB) and over raising every chat model's `-fitt`.
+- **Hybrid candidates**: the best 10 keyword hits and the best semantic hits, 30 together, reranked into one order.
+
+Serving: llama.cpp cannot run the model yet (ggml-org/llama.cpp#26286 is open, and its author does not plan llama-server support), so `rerank/server.py` serves it with transformers behind llama-server's `/v1/rerank` API. It imports the model's own `modeling.py` from the weights directory (revision `e8a93f33`, under `/srv/models/hf`), not through `trust_remote_code`. nixcfg runs it on ComfyUI's CUDA interpreter.
+
+Measured on the RTX 3080, bf16, 2026-10-06:
+
+| | |
+|---|---|
+| weights | 1.14 GB, about 3.1 GB held after the first request |
+| load | 2.2 s, plus 1.4 s for the first call's kernels |
+| 30 code pieces, 26-30k characters | 0.48-0.65 s |
+| 30 pieces, 40k characters | 1.08 s |
+| same on the CPU, fp32 | 32-75 s, so no CPU fallback |
+
+On six queries with known answers in teaterihuskvarna, reranking the top 30 moved the answer from rank 17 to 3, from 3 to 1 twice, from 3 to 2, and kept rank 1. The Swedish query had no answer in its top 30 before or after.
+
+In hister: `semantic_search.rerank` in the config. Results gain `reranked` (doc_id, url, rerank_score, best first) and `rerank_error`. A semantic hit is read by its best body chunk, never by its metadata chunk; a keyword hit by the start of its text; each with its title, cut at 2000 characters. Only the first page of a relevance-sorted search is reranked. Any failure leaves the results in their old order and says why.
+
+The query embedding, not the reranker, is the slow part today: 2.7-3.0 s on the CPU embedder under load on 2026-10-06, against 0.09 s on 2026-09-26.
+
 ## Closed 2026-10-05 - Build on hister or rewrite
 
 hister (Go, AGPL-3.0) covers web history and files: a Firefox extension that captures full page content, a keyword index, file parsers, MCP, a web UI and a TUI. It calls an OpenAI-compatible `/v1/embeddings` endpoint, so it can use `:5002`.
