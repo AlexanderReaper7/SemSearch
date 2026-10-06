@@ -92,7 +92,7 @@ function run(source) {
 
   const busy = () => (pick.busy = flights.length > 0);
   const launch = (text) => {
-    const flight = { seq: ++seq, text, ...search(source, text) };
+    const flight = { seq: ++seq, ...search(source, text) };
     flights.push(flight);
     for (const between of flights.slice(1, -1)) between.child.kill();
     flights = flights.length > 2 ? [flights[0], flights[flights.length - 1]] : flights;
@@ -102,8 +102,7 @@ function run(source) {
         if (flight.seq < shown) return;
         shown = flight.seq;
         pick.items = hits.map(item);
-        const stale = flight.text !== pick.value.trim() ? `for "${flight.text}"` : '';
-        pick.title = [stale, warning, hits.length === 0 ? 'no hits' : ''].filter(Boolean).join('  ') || undefined;
+        pick.title = [warning, hits.length === 0 ? 'no hits' : ''].filter(Boolean).join('  ') || undefined;
       },
       (e) => {
         if (!e.killed && flight.seq > shown) pick.title = `semsearch: ${e.message}`;

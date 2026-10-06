@@ -96,16 +96,14 @@ test('a late answer for older text does not replace a newer one', async () => {
   assert.strictEqual(pick.items[0].label, 'new@100');
 });
 
-test('the oldest answer shows while the newest runs, marked with its text', async () => {
+test('the oldest answer shows while the newest runs', async () => {
   type('first@600');
   await sleep(400);
   type('second@1500');
   await sleep(700);
   assert.strictEqual(pick.items[0].label, 'first@600');
-  assert.strictEqual(pick.title, 'for "first@600"');
   assert.strictEqual(pick.busy, true);
   await sleep(1500);
   assert.strictEqual(pick.items[0].label, 'second@1500');
-  assert.strictEqual(pick.title, undefined);
   assert.strictEqual(pick.busy, false);
 });
