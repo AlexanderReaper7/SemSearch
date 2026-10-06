@@ -175,6 +175,10 @@ A piece of code is a hister document named `vscode://file/<path>:<line>:1`, and 
 
 The user chose: column 1 as before, and the piece's real column only when an earlier piece of the same file starts on its line. Every other URL stays the same, so only the lost pieces and the pieces whose URL now holds different text are embedded again. Rejected: the real column for every piece, which renames every piece that starts on an indented line and re-embeds most of the code. `PIECE_FORMAT` 4 re-adds every file once. The VS Code extension opens a hit at its column.
 
+## 2026-10-06 - Benchmarks run against a seeded instance
+
+`bench/` measures code search quality, query latency and embedding throughput. The user's choices, each with its reason, are in [bench/README.md](../bench/README.md): a seeded hister of its own rather than the real index, a corpus of the six answer repositories at pinned commits, seeding on the 3080, the relevance rule (implementation, a test that demonstrates it, or text that explains it), and queries written by the agent and reviewed by Codex. The first results are in `bench/results/`.
+
 ## Closed 2026-10-05 - Build on hister or rewrite
 
 hister (Go, AGPL-3.0) covers web history and files: a Firefox extension that captures full page content, a keyword index, file parsers, MCP, a web UI and a TUI. It calls an OpenAI-compatible `/v1/embeddings` endpoint, so it can use `:5002`.
