@@ -19,10 +19,14 @@ indexer:
   directories: []
 semantic_search:
   enable: true
-  # Overridden with HISTER__SEMANTIC_SEARCH__EMBEDDING_ENDPOINT while a
-  # backlog indexes on the GPU. The vectors match to cosine 0.9997.
-  embedding_endpoint: http://127.0.0.1:5002/v1/embeddings
-  embedding_model: Octen-Embedding-4B
+  # Through InferMux to the zbox's GTX 1060, and to this host's RTX 3080 when
+  # the zbox answers 502, 503 or 504 (nixcfg's failover.yaml, InferMux 0016).
+  # The key is HISTER__SEMANTIC_SEARCH__API_KEY, from the same sops secret as
+  # the reranker's. Until 2026-10-06 this was the CPU server on :5002 under
+  # the name Octen-Embedding-4B, the same GGUF; see ../docs/decisions.md for
+  # why the index was kept.
+  embedding_endpoint: http://127.0.0.1:5001/v1/embeddings
+  embedding_model: Octen-Embedding-4B.Q8_0
   embedding_timeout: 600
   dimensions: 2560
   max_context_length: 1024
@@ -36,7 +40,9 @@ semantic_search:
   # Filters now apply before ranking, so this no longer has to feed a
   # filter that runs afterwards.
   result_limit: 50
-  # The CPU embedder shares 8 CPUs with the VM; past 3 s semsearch warns.
+  # A query takes 0.04 s on the zbox. The margin covers a failover: up to 5 s
+  # to give up on the zbox, then loading the model on the 3080 after
+  # unloading whatever held it. Past 3 s semsearch warns.
   query_embedding_timeout: 30
   semantic_weight: 0.5
   max_embedding_concurrency: 2

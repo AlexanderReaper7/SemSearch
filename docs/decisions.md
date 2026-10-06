@@ -14,7 +14,7 @@ Consequence: every source uses the same embedding model. A cross-source query th
 
 ## 2026-09-26 - One embedding model, Octen-Embedding-4B Q8_0
 
-The model nixcfg already serves on `:5002` (`modules/nixos/llm.nix`), CPU-only. It stays resident for queries and incremental updates. Initial indexing runs on the GPU whenever the GPU is free, because a backlog on the CPU takes days.
+The model nixcfg already serves on `:5002` (`modules/nixos/llm.nix`), CPU-only. Since 2026-10-06 it runs on the zbox's GPU instead, see below. It stays resident for queries and incremental updates. Initial indexing runs on the GPU whenever the GPU is free, because a backlog on the CPU takes days.
 
 Measured 2026-09-26 on the RTX 3080 and Ryzen 9 9900X, same llama.cpp build, batches of 8 real text chunks:
 
@@ -146,6 +146,28 @@ On six queries with known answers in teaterihuskvarna, reranking the top 30 move
 In hister: `semantic_search.rerank` in the config. Results gain `reranked` (doc_id, url, rerank_score, best first) and `rerank_error`. A semantic hit is read by its best body chunk, never by its metadata chunk; a keyword hit by the start of its text; each with its title, cut at 2000 characters. Only the first page of a relevance-sorted search is reranked. Any failure leaves the results in their old order and says why.
 
 The query embedding, not the reranker, is the slow part today: 2.7-3.0 s on the CPU embedder under load on 2026-10-06, against 0.09 s on 2026-09-26.
+
+## 2026-10-06 - The embedder moves to the zbox's GPU
+
+The query embedding took 2.7-6.6 s on reaperboi's CPU while it was loaded. The user chose the zbox's GTX 1060 6 GB for the embedder and kept the reranker on reaperboi's RTX 3080. The zbox's CPU has 2 cores, so the card was the only option there.
+
+Measured on the 1060 with ubatch 2048, 2026-10-06:
+
+| | zbox, GTX 1060 | reaperboi, CPU under load |
+|---|---|---|
+| VRAM | 5655 MiB | |
+| load | about 3 s | |
+| one query | 0.04 s | 2.7-6.6 s |
+| eight code chunks, 6132 tokens | 14 s | 47-49 s |
+
+The user chose:
+
+- **An InferMux model on the zbox**, `Octen-Embedding-4B.Q8_0` in nixcfg's `hosts/zbox/infermux/models`, kept loaded and taking turns with Immich ML. reaperboi's CPU server on `:5002` is gone.
+- **A fallback on reaperboi's 3080, failed over by InferMux** (InferMux 0016), so Episteme gets it too. A request goes to the zbox first and to the 3080 when the zbox answers 502, 503 or 504. On the 3080 it evicts a chat model or the reranker. The failover format allows a CPU place, and none is defined.
+
+Both run with `--ubatch-size 2048 --parallel 1`. An embedding must fit in one ubatch, and hister counts words and punctuation rather than the model's tokens, so a 1024-word chunk of code can be longer than 1024 tokens. ubatch 4096 does not fit the 1060.
+
+hister now calls `:5001` with the name `Octen-Embedding-4B.Q8_0`. Both are in hister's embedding fingerprint, which would have warned "Run `hister reindex`" on every start. The user chose to keep the index, 84,784 chunks and about 11M tokens (7 h on the zbox), because the GGUF is the same. The stored fingerprint was deleted once and hister stored the new one on its next start (`backfillEmbeddingFingerprint`). The old vectors came from the CPU and from the 3080, which agreed to cosine 0.9997.
 
 ## Closed 2026-10-05 - Build on hister or rewrite
 
