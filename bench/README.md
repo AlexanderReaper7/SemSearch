@@ -47,3 +47,27 @@ A query whose reranker was not loaded beforehand is reported apart as cold. A se
 Embedding endpoint throughput, batch 8, concurrency 2, which is what hister sends. It is not indexing throughput: file discovery, splitting and hister's index writes are not in it. The sample is real chunks from the vector store, rebuilt into the text hister embeds (`document:` before a metadata chunk, the title, date and language lines and `content:` before a body chunk), chosen by `--seed` from the chunks ordered by key. The sample's hash is saved; it changes when the index does. Metadata and body chunks are also timed apart.
 
 `--target local` goes through `/upstream/`, past the failover, so it loads the model on reaperboi's card and evicts what was there.
+
+## Agent model speed
+
+`llm_speed.py` runs llama-bench (InferMux's llama.cpp build) on GGUF files: prompt processing (pp512) and generation (tg128) at context depths 0, 8192 and 16384, with the peak VRAM nvidia-smi attributes to the process. It runs outside InferMux, whose warden unloads its models while a foreign process uses the card.
+
+```sh
+uv run bench/llm_speed.py /srv/models/agent-candidates/*.gguf --note "..."
+```
+
+The user's minimum is 100 tok/s of generation (2026-10-06); it is read at depth 16384, since the agent's context fills with tool results. The first test of each model (depth 0) runs right after the load and is noisy; the deeper ones are not. The desktop holds about 3.4 GB of the card, which nvidia-smi does not list as compute processes, so about 6.5 GB is left for models.
+
+## Agent
+
+`agent.py` runs the deep search agent on the queries: a llama-server per GGUF file (or `--endpoint` for a server already running), the instant results up front, read-only tools (search, grep, read, git), at most 12 model calls. It first unloads InferMux's models, since a server that cannot allocate never shows the GPU load that makes the warden yield; the first search loads the reranker back. Searches without rerank scores are counted as degraded; a run with many is not comparable.
+
+```sh
+uv run bench/agent.py /srv/models/agent-candidates/Qwen3.5-4B-Q4_K_M.gguf --runs 3 --think \
+  --max-tokens 1280 --server-args "--reasoning on --reasoning-budget 256" --note "..."
+uv run bench/agent.py --rescore results/*-agent.json    # score saved answers again
+```
+
+`--claude opus` runs the agent as `claude -p` sessions instead, through the subscription: Claude Code's loop with the harness's system prompt, no built-in tools, the four tools from `mcp_tools.py` (an MCP server over the same `call()`), no user settings, hooks, plugins, skills or CLAUDE.md, an empty temp directory, and none of the calling process's `CLAUDE*` variables. A session with any other tool list stops the run. Claude Code still adds its environment block, the date and the account's email. Its results carry `teacher_restricted`: they are evaluation only, never training data.
+
+The agent answers `path:start-end | why`, one hit per line. A hit is correct when its file is an answer's file and its range holds the answer's line and spans under 80 lines. Each run is scored twice. Strict takes the format as written. Lenient (proposed 2026-10-07) ignores bullets, bold, backticks and a `path:` label, and reads a bare `path:N` at a piece's first line as that piece, as the instant results show it; a file, a line and a why are still required.
