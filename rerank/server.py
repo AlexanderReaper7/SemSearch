@@ -71,6 +71,23 @@ def load(model_dir: Path, device: str, cls=None, attention=None):
     return cls.from_pretrained(str(model_dir), dtype=dtype, attn_implementation=attention).to(device).eval()
 
 
+def release(gpu: threading.Lock, idle: dict, after: float):
+    """torch's caching allocator keeps the largest request's activations
+    reserved, 1.8 GB above the weights for 60k characters. Once no request has
+    come for `after` seconds, they go back to the driver; the weights stay. The
+    next request allocates again, which costs milliseconds against its
+    hundreds."""
+    while True:
+        time.sleep(1)
+        if not idle["held"] or time.monotonic() - idle["since"] < after:
+            continue
+        with gpu:
+            before = torch.cuda.memory_reserved()
+            torch.cuda.empty_cache()
+            idle["held"] = False
+        print(f"released {(before - torch.cuda.memory_reserved()) / 2**20:.0f} MiB after {after:.0f} s idle", file=sys.stderr, flush=True)
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--model", type=Path, required=True, help="directory with the weights, config, tokenizer and modeling.py")
@@ -80,6 +97,7 @@ def main():
     # 30 pieces of 2,000 characters, hister's limit, are 60k characters and
     # peak at 1.8 GB of VRAM with flash-attn.
     p.add_argument("--max-chars", type=int, default=120_000, help="refuse a request whose query and documents are longer")
+    p.add_argument("--release-after", type=float, default=10, help="seconds idle before the activations' memory goes back to the driver, 0 never")
     args = p.parse_args()
 
     name = args.model.name
@@ -87,6 +105,9 @@ def main():
     model = load(args.model, args.device)
     print(f"loaded {name} on {args.device} with {model.config._attn_implementation} in {time.perf_counter() - t:.1f} s", file=sys.stderr, flush=True)
     gpu = threading.Lock()
+    idle = {"since": time.monotonic(), "held": False}
+    if args.device == "cuda" and args.release_after > 0:
+        threading.Thread(target=release, args=(gpu, idle, args.release_after), daemon=True).start()
 
     class Handler(BaseHTTPRequestHandler):
         def reply(self, status, body):
@@ -130,6 +151,7 @@ def main():
                 print(f"rerank failed: {e!r}", file=sys.stderr, flush=True)
                 return self.reply(500, {"error": {"message": f"rerank failed: {e}"}})
             dt = time.perf_counter() - t
+            idle.update(since=time.monotonic(), held=True)
             print(f"rerank {len(docs)} documents, {chars} characters, {dt:.2f} s", file=sys.stderr, flush=True)
             self.reply(200, {
                 "model": name,
