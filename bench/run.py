@@ -4,6 +4,7 @@
 """Benchmarks for code search, against a seeded hister instance of its own.
 See bench/README.md.
 
+    uv run bench/run.py checkout     clone the pinned corpus
     uv run bench/run.py seed         clone the pinned corpus and index it
     uv run bench/run.py check        every answer's line and the pieces that hold it
     uv run bench/run.py quality      ranks of the known answers in queries.toml
@@ -37,7 +38,10 @@ HERE = Path(__file__).parent
 REPO = HERE.parent
 SOURCES = Path.home() / "Projects"
 # Everything the seeded instance owns. Nothing here touches the real one.
-BENCH = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "semantic-search/bench"
+SHARE = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "semantic-search"
+# SEMSEARCH_BENCH moves it, so a second embedder gets an instance of its own.
+# bench-v2 holds the corpus of 2026-10-07; `bench` the six repositories before it.
+BENCH = Path(os.environ.get("SEMSEARCH_BENCH", SHARE / "bench-v2"))
 PROJECTS = BENCH / "corpus"  # the pinned checkouts, one per repository
 XDG = BENCH / "xdg"  # semsearch's state file goes under this XDG_DATA_HOME
 DATA = XDG / "semantic-search"
@@ -73,27 +77,64 @@ def key() -> str:
 # The seeded instance
 
 
+def repos() -> dict[str, dict]:
+    return tomllib.loads((HERE / "corpus.toml").read_text())["repos"]
+
+
 def pins() -> dict[str, str]:
-    return tomllib.loads((HERE / "corpus.toml").read_text())["pins"]
+    return {name: r["pin"] for name, r in repos().items()}
 
 
 def git(*args: str) -> str:
     return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout.strip()
 
 
-def checkout() -> None:
-    """Each pinned repository, cloned from ~/Projects and at its pin."""
+def sparse(r: dict) -> list[str]:
+    """The repository's sparse-checkout patterns, or none for all of it.
+    `keep` re-includes paths under an excluded directory's children, such as
+    the source language among translations."""
+    if not r.get("include") and not r.get("exclude"):
+        return []
+    return list(r.get("include") or ["/*"]) + [f"!{p}" for p in r.get("exclude", [])] + list(r.get("keep", []))
+
+
+def excluded_bytes(target: Path) -> tuple[int, int]:
+    """Files and bytes the sparse checkout leaves out at HEAD, so a wrong
+    exclusion shows as a number. Sizes come from the tree, which fetches the
+    left-out blobs of a blobless clone once."""
+    skipped = [line[2:] for line in git("-C", str(target), "ls-files", "-t").splitlines() if line.startswith("S ")]
+    if not skipped:
+        return 0, 0
+    sizes = {}
+    for line in git("-C", str(target), "ls-tree", "-r", "-l", "HEAD").splitlines():
+        meta, path = line.split("\t", 1)
+        sizes[path] = int(meta.split()[3]) if meta.split()[3] != "-" else 0
+    return len(skipped), sum(sizes.get(p, 0) for p in skipped)
+
+
+def checkout(args=None) -> None:
+    """Each repository at its pin: cloned blobless from its `url`, or from
+    ~/Projects, and checked out sparse when it has `include` or `exclude`."""
     PROJECTS.mkdir(parents=True, exist_ok=True)
-    for repo, commit in pins().items():
+    for repo, r in repos().items():
         target = PROJECTS / repo
         if not target.exists():
-            git("clone", "-q", "--shared", "--no-checkout", str(SOURCES / repo), str(target))
-        git("-C", str(target), "fetch", "-q", "origin")
-        git("-C", str(target), "checkout", "-q", "--force", "--detach", commit)
+            if r.get("url"):
+                git("clone", "-q", "--filter=blob:none", "--no-checkout", r["url"], str(target))
+            else:
+                git("clone", "-q", "--shared", "--no-checkout", str(SOURCES / repo), str(target))
+        if subprocess.run(["git", "-C", str(target), "cat-file", "-e", f"{r['pin']}^{{commit}}"], capture_output=True).returncode:
+            git("-C", str(target), "fetch", "-q", "origin")
+        if patterns := sparse(r):
+            git("-C", str(target), "sparse-checkout", "set", "--no-cone", *patterns)
+        else:
+            git("-C", str(target), "sparse-checkout", "disable")
+        git("-C", str(target), "checkout", "-q", "--force", "--detach", r["pin"])
         git("-C", str(target), "clean", "-q", "-fdx")
         if repo == "Semantic-Search":
             shutil.rmtree(target / "bench", ignore_errors=True)
-        print(f"{repo} at {commit[:10]}", file=sys.stderr)
+        files, size = excluded_bytes(target)
+        print(f"{repo} at {r['pin'][:10]}" + (f", {files} files and {size / 1e6:.2f} MB excluded" if files else ""), file=sys.stderr)
 
 
 def verify_checkout() -> None:
@@ -124,8 +165,10 @@ def instance(seeding: bool = False):
         if s.connect_ex(("127.0.0.1", PORT)) == 0:
             sys.exit(f"something already listens on :{PORT}")
     env = os.environ | secrets()
+    # An endpoint set in the environment wins, so another embedder can seed
+    # its own instance (SEMSEARCH_BENCH apart) and answer its queries too.
     if seeding:
-        env["HISTER__SEMANTIC_SEARCH__EMBEDDING_ENDPOINT"] = SEED_ENDPOINT
+        env.setdefault("HISTER__SEMANTIC_SEARCH__EMBEDDING_ENDPOINT", SEED_ENDPOINT)
     HISTER_DATA.mkdir(parents=True, exist_ok=True)
     log = open(BENCH / "hister.log", "a")
     proc = subprocess.Popen([shutil.which("hister"), "--config", str(config()), "listen"], env=env, stdout=log, stderr=log)
@@ -192,7 +235,7 @@ def backlog(data: Path = HISTER_DATA) -> int:
 
 def real_backlog() -> int:
     """The real instance's, which shares the embedder with the queries."""
-    return backlog(HISTER_DATA.parent.parent / "hister")
+    return backlog(SHARE / "hister")
 
 
 def setup() -> dict:
@@ -202,7 +245,9 @@ def setup() -> dict:
 
     return {"pins": pins(), "hister": os.path.realpath(shutil.which("hister")),
             "semsearch": os.path.realpath(shutil.which("semsearch")),
-            "hister_config_sha256": digest(BENCH / "hister.yml"), "queries_sha256": digest(HERE / "queries.toml"),
+            "hister_config_sha256": digest(BENCH / "hister.yml"), "queries_sha256": queries_digest(),
+            # hister settings overridden from the environment, keys left out.
+            "hister_env": {k: v for k, v in sorted(os.environ.items()) if k.startswith("HISTER__") and "KEY" not in k},
             "real_backlog": real_backlog()}
 
 
@@ -223,8 +268,76 @@ def summarize(xs: list[float]) -> dict | None:
     return out
 
 
-def queries() -> list[dict]:
-    return tomllib.loads((HERE / "queries.toml").read_text())["query"]
+QUERIES = HERE / "queries"  # one file per repository, the queries written for it
+
+
+def queries(split: str | None = None) -> list[dict]:
+    """Every query, with `repo` (the file it is in) and that repository's
+    `split`; only one split's when `split` is given."""
+    corpus = repos()
+    out = []
+    for f in sorted(QUERIES.glob("*.toml")):
+        for q in tomllib.loads(f.read_text()).get("query", []):
+            out.append(q | {"repo": f.stem, "split": corpus[f.stem]["split"]})
+    return [q for q in out if split is None or q["split"] == split]
+
+
+def queries_digest() -> str:
+    h = hashlib.sha256()
+    for f in sorted(QUERIES.glob("*.toml")):
+        h.update(f.name.encode() + b"\0" + f.read_bytes())
+    return h.hexdigest()[:16]
+
+
+# What a query and its answers may say (docs/decisions.md, 2026-10-07).
+CATEGORIES = ("behavior", "explanation", "usage", "symptom", "config", "media")
+ADVERSARIAL = ("decoy", "near-miss", "negation", "no-answer", "short", "verbose", "typo", "language", "injection")
+TEXT_KINDS = ("code", "test", "doc", "config")
+MEDIA_KINDS = {"image": {"png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "svg", "tif", "tiff", "avif"},
+               "audio": {"wav", "mp3", "ogg", "oga", "flac", "m4a", "opus", "aac", "aiff"},
+               "video": {"mp4", "webm", "mov", "mkv", "avi", "m4v", "ogv"}, "pdf": {"pdf"}}
+
+
+def problems(q: dict) -> list[str]:
+    """What is wrong with a query, against the checked-out corpus."""
+    out = []
+    for field in ("id", "text", "category", "answers"):
+        if field not in q:
+            out.append(f"missing {field}")
+    if q.get("category") not in CATEGORIES:
+        out.append(f"category {q.get('category')!r} is not one of {', '.join(CATEGORIES)}")
+    adv = q.get("adversarial")
+    if adv is not None and adv not in ADVERSARIAL:
+        out.append(f"adversarial {adv!r} is not one of {', '.join(ADVERSARIAL)}")
+    if adv is not None and not q.get("note"):
+        out.append("an adversarial query needs a note on its trap")
+    answers = q.get("answers", [])
+    if not answers and adv != "no-answer":
+        out.append("no answers, and not marked adversarial = \"no-answer\"")
+    if answers and adv == "no-answer":
+        out.append("marked no-answer but has answers")
+    if q.get("category") == "media" and answers and not any(a.get("kind") in MEDIA_KINDS for a in answers):
+        out.append("a media query needs a media answer")
+    for a in answers:
+        where = f"{a.get('repo')}/{a.get('path')}"
+        file = PROJECTS / str(a.get("repo")) / str(a.get("path"))
+        if not file.is_file():
+            out.append(f"{where}: no such file in the checkout")
+            continue
+        kind = a.get("kind")
+        if kind in MEDIA_KINDS:
+            if file.suffix.lower().lstrip(".") not in MEDIA_KINDS[kind]:
+                out.append(f"{where}: kind {kind} does not fit the file type")
+            if "line" in a or "anchor" in a:
+                out.append(f"{where}: a media answer is the whole file, without line or anchor")
+        elif kind in TEXT_KINDS:
+            if not isinstance(a.get("line"), int) or not isinstance(a.get("anchor"), str) or not a["anchor"].strip():
+                out.append(f"{where}: needs an integer line and a non-empty anchor")
+            elif locate(file, a) is None:
+                out.append(f"{where}: no line reads {a['anchor']!r} (expected near line {a['line']})")
+        else:
+            out.append(f"{where}: kind {kind!r} is not one of {', '.join(TEXT_KINDS + tuple(MEDIA_KINDS))}")
+    return out
 
 
 # Answers and pieces
@@ -234,6 +347,9 @@ class Index:
     """semsearch's pieces, from its state file, and which of them have vectors."""
 
     def __init__(self) -> None:
+        if not (DATA / "code-state.json").exists():
+            self.files, self.embedded = {}, set()
+            return
         state = json.loads((DATA / "code-state.json").read_text())
         # Per file, its pieces in file order as (line, url).
         self.files: dict[str, list[tuple[int, str]]] = {
@@ -257,8 +373,8 @@ class Index:
 def locate(file: Path, answer: dict) -> int | None:
     """The line of `file` holding the answer's anchor text, the nearest to the
     answer's line when several do, or None when none does."""
-    lines = file.read_text().splitlines()
-    same = [i + 1 for i, l in enumerate(lines) if l.strip() == answer["anchor"]]
+    lines = file.read_text(errors="replace").splitlines()
+    same = [i + 1 for i, l in enumerate(lines) if l.strip() == answer["anchor"].strip()]
     return min(same, key=lambda n: abs(n - answer["line"])) if same else None
 
 
@@ -271,6 +387,8 @@ def acceptable(answer: dict, index: Index) -> dict[str, str]:
     checkout the answer is where its anchor text is (`locate`), so it follows
     the code as lines move."""
     out = {}
+    if answer["kind"] in MEDIA_KINDS:
+        return out  # nothing embeds media yet (docs/decisions.md, 2026-10-07)
     for checkout in checkouts(answer["repo"]):
         file = PROJECTS / checkout / answer["path"]
         if not file.exists() or (line := locate(file, answer)) is None:
@@ -281,25 +399,38 @@ def acceptable(answer: dict, index: Index) -> dict[str, str]:
 
 
 def check(args) -> None:
+    """Every query's problems (`problems`), and for each text answer the
+    pieces that hold it once the instance is seeded."""
     verify_checkout()
     index = Index()
     bad = 0
+    ids: dict[str, str] = {}
     for q in queries():
-        print(f"{q['id']}: {q['text']}")
+        print(f"{q['repo']}/{q['id']}: {q['text']}")
+        if q["id"] in ids:
+            print(f"  ERROR the id is used in {ids[q['id']]} too")
+            bad += 1
+        ids[q["id"]] = q["repo"]
+        for p in problems(q):
+            print(f"  ERROR {p}")
+            bad += 1
         for a in q["answers"]:
+            if a["kind"] in MEDIA_KINDS:
+                print(f"  {a['kind']:6} {a['repo']}/{a['path']}  (not indexed: nothing embeds media)")
+                continue
             file = PROJECTS / a["repo"] / a["path"]
             line = locate(file, a) if file.exists() else None
             if line is None:
-                print(f"  ERROR {a['repo']}/{a['path']}: no line reads {a['anchor']!r}")
-                bad += 1
                 continue
             moved = f" (moved from {a['line']})" if line != a["line"] else ""
-            pieces = acceptable(a, index)
-            embedded = sum(u in index.embedded for u in pieces)
-            print(f"  {a['kind']:4} {a['repo']}/{a['path']}:{line}{moved}  {a['anchor'][:90]}")
-            print(f"       {len(pieces)} pieces in {len(set(pieces.values()))} checkouts, {embedded} embedded")
-            if not pieces:
-                bad += 1
+            print(f"  {a['kind']:6} {a['repo']}/{a['path']}:{line}{moved}  {a['anchor'][:90]}")
+            if index.files:
+                pieces = acceptable(a, index)
+                embedded = sum(u in index.embedded for u in pieces)
+                print(f"         {len(pieces)} pieces in {len(set(pieces.values()))} checkouts, {embedded} embedded")
+                if not pieces:
+                    bad += 1
+    print(f"{len(ids)} queries, {bad} problems")
     sys.exit(1 if bad else 0)
 
 
@@ -329,51 +460,99 @@ def quality(args) -> None:
         run_quality(args)
 
 
+# The groups every quality summary is broken down by.
+GROUPS = {
+    "split": lambda q: q["split"],
+    "category": lambda q: q["category"],
+    "adversarial": lambda q: q.get("adversarial") or "none",
+    "writer": lambda q: q.get("by", "agent 2026-10-06"),
+    "lang": lambda q: q.get("lang", "en"),
+}
+
+
+def separation(none_scores: list[float], hit_scores: list[float]) -> float | None:
+    """How often a no-answer query's best rerank score is below the rerank
+    score of an answerable query's first correct hit, over all such pairs."""
+    if not none_scores or not hit_scores:
+        return None
+    below = sum((n < h) + 0.5 * (n == h) for n in none_scores for h in hit_scores)
+    return round(below / (len(none_scores) * len(hit_scores)), 3)
+
+
 def run_quality(args) -> None:
     index = Index()
     rows = []
-    for q in queries():
+    for q in queries(None if args.split == "all" else args.split):
         resp, took, _ = search(q["text"])
         answers = [(a, acceptable(a, index)) for a in q["answers"]]
         ranked = orders(resp)
+        scores = {r["url"]: r.get("rerank_score") for r in resp.get("reranked") or []}
 
         def first(urls: list[str], kinds: set[str]) -> int | None:
             good = {u for a, pieces in answers if a["kind"] in kinds for u in pieces}
             return next((i + 1 for i, u in enumerate(urls) if u in good), None)
 
-        ranks = {name: first(urls, {"code", "test", "doc"}) for name, urls in ranked.items()}
-        code_ranks = {name: first(urls, {"code"}) for name, urls in ranked.items()}
+        answerable = bool(q["answers"])
+        ranks = {name: first(urls, set(TEXT_KINDS) | set(MEDIA_KINDS)) for name, urls in ranked.items()} if answerable else None
+        code_ranks = {name: first(urls, {"code"}) for name, urls in ranked.items()} if answerable else None
+        hit = ranks and ranks["reranked"]
         pieces = [set(p) for _, p in answers]
         rows.append({
-            "id": q["id"], "text": q["text"], "answers": q["answers"], "ranks": ranks, "code_ranks": code_ranks,
+            "id": q["id"], "repo": q["repo"], "text": q["text"], "answers": q["answers"],
+            **{g: f(q) for g, f in GROUPS.items()},
+            "ranks": ranks, "code_ranks": code_ranks,
+            "media": any(a["kind"] in MEDIA_KINDS for a in q["answers"]),
+            "top_rerank_score": max(scores.values(), default=None),
+            "hit_rerank_score": scores.get(ranked["reranked"][hit - 1]) if hit else None,
             "any_answer_embedded": any(u in index.embedded for p in pieces for u in p),
             "every_answer_embedded": all(any(u in index.embedded for u in p) for p in pieces),
             "semantic_error": resp.get("semantic_error"), "rerank_error": resp.get("rerank_error"),
             "seconds": round(took, 3), "orders": ranked,
         })
-        print(f"{q['id']:26} " + " ".join(f"{k[:4]}={v or '-':>3}" for k, v in ranks.items()), file=sys.stderr)
+        shown = " ".join(f"{k[:4]}={v or '-':>3}" for k, v in ranks.items()) if ranks else f"no answer, top score {rows[-1]['top_rerank_score']}"
+        print(f"{q['repo'] + '/' + q['id']:48} {shown}", file=sys.stderr)
 
-    def metrics(field: str) -> dict:
+    answerable = [r for r in rows if r["ranks"] is not None]
+    unanswerable = [r for r in rows if r["ranks"] is None]
+
+    def metrics(rs: list[dict], field: str) -> dict:
         out = {}
         for name in ("keyword", "similarity", "reranked", "final"):
-            rs = [r[field][name] for r in rows]
-            m = {f"hits@{k}": sum(1 for x in rs if x and x <= k) for k in CUTOFFS}
-            m |= {f"rate@{k}": round(m[f"hits@{k}"] / len(rs), 3) for k in CUTOFFS}
-            m["mrr"] = round(sum(1 / x for x in rs if x) / len(rs), 3)
+            xs = [r[field][name] for r in rs]
+            m = {"n": len(xs)} | {f"hits@{k}": sum(1 for x in xs if x and x <= k) for k in CUTOFFS}
+            m |= {f"rate@{k}": round(m[f"hits@{k}"] / len(xs), 3) if xs else None for k in CUTOFFS}
+            m["mrr"] = round(sum(1 / x for x in xs if x) / len(xs), 3) if xs else None
             out[name] = m
         return out
 
+    groups = {g: {v: metrics([r for r in answerable if r[g] == v], "ranks")["final"]
+                  for v in sorted({r[g] for r in answerable})} for g in GROUPS}
+    media = [r for r in answerable if r["media"]]
+    none = {"n": len(unanswerable),
+            "separation": separation([r["top_rerank_score"] for r in unanswerable if r["top_rerank_score"] is not None],
+                                     [r["hit_rerank_score"] for r in answerable if r["hit_rerank_score"] is not None]),
+            "median_top_score": summarize([r["top_rerank_score"] for r in unanswerable if r["top_rerank_score"] is not None])}
     lengths = {name: max(len(r["orders"][name]) for r in rows) for name in rows[0]["orders"]}
-    result = {"kind": "quality", "when": datetime.now().isoformat(timespec="seconds"), "note": args.note,
+    result = {"kind": "quality", "when": datetime.now().isoformat(timespec="seconds"), "note": args.note, "split": args.split,
               "setup": setup(), "backlog": backlog(), "queries": len(rows), "list_lengths": lengths,
-              "summary": metrics("ranks"), "summary_code_only": metrics("code_ranks"), "rows": rows}
-    print(f"\n{len(rows)} queries, backlog {result['backlog']}. MRR over the returned lists, lengths {lengths}.")
-    for title, s in (("any correct piece", result["summary"]), ("implementation only", result["summary_code_only"])):
+              "summary": metrics(answerable, "ranks"), "summary_code_only": metrics(answerable, "code_ranks"),
+              "groups": groups, "media": {"n": len(media), "answers_not_indexed": len(media)}, "no_answer": none, "rows": rows}
+    print(f"\n{len(rows)} queries ({args.split}): {len(answerable)} with answers, {len(unanswerable)} without. "
+          f"Backlog {result['backlog']}. MRR over the returned lists, lengths {lengths}.")
+    for title, sm in (("any correct piece", result["summary"]), ("implementation only", result["summary_code_only"])):
         print(f"\n{title}\n| order | " + " | ".join(f"hit@{k}" for k in CUTOFFS) + " | MRR |\n|---|" + "---|" * (len(CUTOFFS) + 1))
-        for name, m in s.items():
-            print(f"| {name} | " + " | ".join(f"{m[f'hits@{k}']}/{len(rows)}" for k in CUTOFFS) + f" | {m['mrr']} |")
+        for name, m in sm.items():
+            print(f"| {name} | " + " | ".join(f"{m[f'hits@{k}']}/{m['n']}" for k in CUTOFFS) + f" | {m['mrr']} |")
+    print("\nfinal order by group\n| group | value | n | hit@1 | hit@10 | MRR |\n|---|---|---|---|---|---|")
+    for g, vs in groups.items():
+        for v, m in vs.items():
+            print(f"| {g} | {v} | {m['n']} | {m['rate@1']} | {m['rate@10']} | {m['mrr']} |")
+    if media:
+        print(f"\nmedia: {len(media)} queries, all counted as misses: nothing embeds images, sound, video or PDFs, so no answer of theirs is indexed")
+    print(f"no answer: {none['n']} queries, separation {none['separation']} (share of pairs where a no-answer query's best rerank score "
+          f"is below an answerable query's correct hit), median best score {none['median_top_score']}")
     for flag, label in (("any_answer_embedded", "no answer embedded"), ("every_answer_embedded", "some answer not embedded")):
-        missing = [r["id"] for r in rows if not r[flag]]
+        missing = [r["id"] for r in answerable if not r["media"] and not r[flag]]
         if missing:
             print(f"{label}: {', '.join(missing)}")
     errors = [r["id"] for r in rows if r["semantic_error"] or r["rerank_error"]]
@@ -412,7 +591,7 @@ def latency(args) -> None:
 
 
 def run_latency(args) -> None:
-    qs = queries()
+    qs = queries(None if args.split == "all" else args.split)
     random.Random(args.seed).shuffle(qs)
     before = real_backlog()
     rows = []
@@ -519,6 +698,8 @@ def throughput(args) -> None:
 def main() -> None:
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("checkout")
+    s.set_defaults(fn=checkout)
     s = sub.add_parser("seed")
     s.set_defaults(fn=seed)
     s = sub.add_parser("check")
@@ -526,6 +707,8 @@ def main() -> None:
     for name, fn in (("quality", quality), ("latency", latency)):
         s = sub.add_parser(name)
         s.set_defaults(fn=fn)
+        # Test is for reporting; configurations are tuned on dev (docs/decisions.md, 2026-10-07).
+        s.add_argument("--split", choices=("dev", "test", "all"), default="dev")
         s.add_argument("--note", default="", help="conditions worth keeping with the result")
         s.add_argument("--seed", type=int, default=1, help="query order, for latency")
     s = sub.add_parser("throughput")

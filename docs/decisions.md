@@ -203,6 +203,19 @@ The user chose a splitter of our own on the tree-sitter tree, for code only (`co
 
 A node that fits stays whole, and a cut falls only where a new line starts a named node, so a comment, attribute or annotation directly above a node stays with it and a closing `}` or `end` stays with what it closes. The doc comment on `code` has the rules, `bench/README.md` ("Chunking") the numbers and the tool that measures them. A parse that runs past `PARSE_BUDGET` progress callbacks is given up and the file is cut as text, since one grammar (tree-sitter-objc, issue #22) takes exponential time on some input. The budget counts callbacks instead of time, so a file cuts the same way on a busy machine.
 
+## 2026-10-07 - The eval set grows to about 1,000 queries over a wider corpus
+
+26 queries cannot tell two configurations apart. Between the two chunkers the per-query difference in reciprocal rank had a standard deviation of 0.34, so a paired test at 95% and 80% power needs about 90 queries to see an MRR change of 0.10, 350 for 0.05 and 1,000 for 0.03. The chunker's measured change was 0.016 to 0.029.
+
+The user's choices:
+
+- The corpus is the plan of 2026-10-07: about 40 open-source repositories across some 25 languages, popular and obscure, plus about 28 of the user's own, with vendored code, build output, data dumps and translation catalogs left out by sparse checkout (`bench/corpus.toml`).
+- Claude (`claude -p`, Opus 5.5 at effort medium; the eight largest repositories were drafted at high before the user set medium) and Codex (gpt-6-sol at effort high, the only model the user allowed on the Codex quota) both write queries for every repository, each without seeing the other's, and each reviews the other's. Duplicates are merged. Every query records its writer. Codex runs on the OpenAI models that are to generate training data (deep-search.md, "Training data"), so a fine-tuned model could score high on Codex-written test queries for their style alone. That is measured instead of avoided: test results are broken down per writer, and a gap between the writers that is wider for a fine-tuned model than for its base model is the leak.
+- The user reviews a random 50 of the queries on the user's repositories; the error rate there decides whether more review is needed.
+- Whole repositories go to dev or test, 70/30, so a model that memorized a repository's layout is caught. The 26 existing queries are dev, since configurations were tuned on them.
+- No-answer queries are left out of MRR. Agent mode scores whether the agent replies that nothing answers; instant mode reports how often a no-answer query's best rerank score is below the best rerank score of the correct hit of answerable queries.
+- Queries carry a category and, for about 15%, an adversarial type. About 6% ask for images or sound. Nothing embeds media yet, so those count as misses and get their own row, never left out. Whether media gets a second embedding system (EmbeddingGemma 2) or is described as text is deferred.
+
 ## Closed 2026-10-05 - Build on hister or rewrite
 
 hister (Go, AGPL-3.0) covers web history and files: a Firefox extension that captures full page content, a keyword index, file parsers, MCP, a web UI and a TUI. It calls an OpenAI-compatible `/v1/embeddings` endpoint, so it can use `:5002`.

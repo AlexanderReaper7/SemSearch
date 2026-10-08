@@ -295,11 +295,15 @@ def scores(row: dict, answers: list[tuple[str, int, str]], starts: dict[str, lis
 # Scoring
 
 
-def answer_lines(q: dict) -> list[tuple[str, int, str]]:
+def answer_lines(q: dict) -> list[tuple[str, int | None, str]]:
+    """Each answer as (path, line, kind); a media answer is the whole file,
+    with line None."""
     out = []
     for a in q["answers"]:
         file = CORPUS / a["repo"] / a["path"]
-        if file.exists() and (line := run.locate(file, a)) is not None:
+        if a["kind"] in run.MEDIA_KINDS:
+            out.append((f"{a['repo']}/{a['path']}", None, a["kind"]))
+        elif file.exists() and (line := run.locate(file, a)) is not None:
             out.append((f"{a['repo']}/{a['path']}", line, a["kind"]))
     return out
 
@@ -308,11 +312,13 @@ def score(hits: list[dict], answers: list[tuple[str, int, str]]) -> dict:
     marks = []
     for h in hits:
         lo, hi = min(h["start"], h["end"]), max(h["start"], h["end"])
-        kinds = [k for path, line, k in answers if h["path"] == path and lo <= line <= hi and hi - lo < MAX_SPAN]
+        kinds = [k for path, line, k in answers
+                 if h["path"] == path and (line is None or (lo <= line <= hi and hi - lo < MAX_SPAN))]
         marks.append(kinds[0] if kinds else None)
     first = next((i + 1 for i, k in enumerate(marks) if k), None)
+    # A query without answers is answered right by showing nothing.
     return {"shown": len(hits), "correct": sum(1 for k in marks if k), "first_correct": first,
-            "found": first is not None, "found_code": "code" in marks, "marks": marks}
+            "found": first is not None, "found_code": "code" in marks, "marks": marks, "abstained": not hits}
 
 
 # Serving
@@ -375,10 +381,12 @@ def evaluate(one, name: str, qs: list[dict], runs: int, sampling: dict, parallel
 
     def go(job: tuple[dict, int]) -> dict:
         q, r = job
-        res = one(q["text"]) | {"id": q["id"], "run": r}
+        res = one(q["text"]) | {"id": q["id"], "run": r, "answerable": bool(q["answers"]),
+                                **{g: f(q) for g, f in run.GROUPS.items()}}
         scores(res, answer_lines(q), starts)
         s, st = res["score_lenient"], res["stats"]
-        print(f"  {q['id']:26} run {r}: found={'yes' if s['found'] else 'no ':3} shown={s['shown']} correct={s['correct']} "
+        outcome = f"found={'yes' if s['found'] else 'no ':3}" if q["answers"] else f"abstained={'yes' if s['abstained'] else 'no '}"
+        print(f"  {q['id']:26} run {r}: {outcome} shown={s['shown']} correct={s['correct']} "
               f"tools={st['tool_calls']} bad={st['bad_calls']} {st['seconds']:6.1f} s", file=sys.stderr)
         return res
 
@@ -469,23 +477,34 @@ def agent_claude(model: str, effort: str, query: str) -> dict:
 
 
 def summarize(rows: list[dict]) -> dict:
+    """Found and precision over the queries with answers; for those without,
+    how often the agent showed nothing. Found is broken down by run.GROUPS."""
+    # Rows saved before 2026-10-07 have no `answerable`; every query had answers then.
+    answerable = [r for r in rows if r.get("answerable", True)]
+    unanswerable = [r for r in rows if not r.get("answerable", True)]
     by_q: dict[str, list[dict]] = {}
-    for r in rows:
+    for r in answerable:
         by_q.setdefault(r["id"], []).append(r)
     st = [r["stats"] for r in rows]
 
     def rates(key: str) -> dict:
-        shown = sum(r[key]["shown"] for r in rows)
-        return {
-            "found_rate": round(sum(r[key]["found"] for r in rows) / len(rows), 3),
-            "found_code_rate": round(sum(r[key]["found_code"] for r in rows) / len(rows), 3),
-            "precision": round(sum(r[key]["correct"] for r in rows) / shown, 3) if shown else None,
-            "mean_shown": round(shown / len(rows), 2),
+        shown = sum(r[key]["shown"] for r in answerable)
+        n = len(answerable) or 1
+        out = {
+            "found_rate": round(sum(r[key]["found"] for r in answerable) / n, 3),
+            "found_code_rate": round(sum(r[key]["found_code"] for r in answerable) / n, 3),
+            "precision": round(sum(r[key]["correct"] for r in answerable) / shown, 3) if shown else None,
+            "mean_shown": round(shown / n, 2),
             "per_query_found": {q: round(sum(r[key]["found"] for r in rs) / len(rs), 2) for q, rs in by_q.items()},
+            "abstain_rate_no_answer": round(sum(r[key].get("abstained", not r[key]["shown"]) for r in unanswerable) / len(unanswerable), 3) if unanswerable else None,
         }
+        out["groups"] = {g: {v: round(statistics.mean(r[key]["found"] for r in answerable if r.get(g) == v), 3)
+                             for v in sorted({r[g] for r in answerable if g in r})} for g in run.GROUPS}
+        return out
 
     return {
         "runs": len(rows),
+        "runs_no_answer": len(unanswerable),
         "strict": rates("score"),
         "lenient": rates("score_lenient"),
         "no_answer_runs": sum(1 for r in rows if r["answer"] is None),
@@ -509,6 +528,7 @@ def main() -> None:
     ap.add_argument("--parallel", type=int, default=1, help="runs at a time, with --claude or --endpoint")
     ap.add_argument("--runs", type=int, default=5)
     ap.add_argument("--only", help="comma-separated query ids")
+    ap.add_argument("--split", choices=("dev", "test", "all"), default="dev", help="test is for reporting, dev for tuning")
     ap.add_argument("--ctx", type=int, default=32768)
     ap.add_argument("--temperature", type=float, default=0.6)
     ap.add_argument("--think", action="store_true", help="turn the model's thinking on; cap it with --server-args \"--reasoning-budget N\"")
@@ -524,7 +544,7 @@ def main() -> None:
         ap.error("give GGUF files, --endpoint or --claude")
 
     run.verify_checkout()
-    qs = run.queries()
+    qs = run.queries(None if args.split == "all" else args.split)
     if args.only:
         keep = set(args.only.split(","))
         qs = [q for q in qs if q["id"] in keep]
@@ -533,7 +553,7 @@ def main() -> None:
 
     result = {"kind": "agent", "when": datetime.now().isoformat(timespec="seconds"), "note": args.note,
               "setup": run.setup(), "max_turns": MAX_TURNS, "max_span": MAX_SPAN, "runs": args.runs,
-              "queries": [q["id"] for q in qs], "server_args": args.server_args, "ctx": args.ctx, "models": []}
+              "split": args.split, "queries": [q["id"] for q in qs], "server_args": args.server_args, "ctx": args.ctx, "models": []}
     if args.claude:
         # The Consumer Terms forbid training models on Claude's output; these
         # transcripts measure the ceiling and must stay out of training data.
@@ -565,17 +585,21 @@ def report(result: dict) -> None:
         st, le = s["strict"], s["lenient"]
         print(f"{m['model']:48} found {le['found_rate']:.2f} (strict {st['found_rate']:.2f}, code {le['found_code_rate']:.2f})  "
               f"precision {le['precision']}  shown {le['mean_shown']}  tools {s['tool_calls_mean']}  bad {s['bad_calls']}  "
-              f"no-answer {s['no_answer_runs']}  errors {s['errors']}  degraded {s['degraded_searches']}  median {s['seconds']['median']} s")
+              f"no reply {s['no_answer_runs']}  errors {s['errors']}  degraded {s['degraded_searches']}  median {s['seconds']['median']} s"
+              + (f"  abstained on no-answer {le['abstain_rate_no_answer']}" if le.get("abstain_rate_no_answer") is not None else ""))
 
 
 def rescore(files: list[Path]) -> None:
     starts = piece_starts()
-    answers = {q["id"]: answer_lines(q) for q in run.queries()}
+    qs = run.queries()
+    answers = {q["id"]: answer_lines(q) for q in qs}
+    answerable = {q["id"]: bool(q["answers"]) for q in qs}
     for f in files:
         result = json.loads(f.read_text())
         for m in result["models"]:
             for row in m["rows"]:
                 scores(row, answers[row["id"]], starts)
+                row["answerable"] = answerable[row["id"]]
             m["summary"] = summarize(m["rows"])
         result["rescored"] = datetime.now().isoformat(timespec="seconds")
         f.write_text(json.dumps(result, indent=1, ensure_ascii=False) + "\n")
