@@ -2,7 +2,7 @@
 # selected with type:code, type:file and type:web. Runs the fork at
 # github.com/AlexanderReaper7/hister. See ../docs/decisions.md.
 app:
-  directory: /home/alexander/.local/share/semantic-search/hister
+  directory: /home/alexander/.local/share/semsearch/hister
   title: "Search"
   subtitle: ""
   color_scheme: dark

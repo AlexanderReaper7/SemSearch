@@ -3,7 +3,7 @@
 /config/tui.yaml
 __pycache__/
 # Benchmark data names and quotes the corpus, which includes private
-# repositories, so it lives in the private Semantic-Search-bench repository.
+# repositories, so it lives in the private SemSearch-bench repository.
 # These paths are symlinks into its checkout beside this one.
 /bench/queries
 /bench/drafts

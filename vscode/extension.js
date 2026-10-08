@@ -13,9 +13,9 @@ const os = require('os');
 const path = require('path');
 
 function binary() {
-  const configured = vscode.workspace.getConfiguration('semanticSearch').get('binary');
+  const configured = vscode.workspace.getConfiguration('semsearch').get('binary');
   if (configured) return configured;
-  const build = path.join(os.homedir(), 'Projects/Semantic-Search/target/release/semsearch');
+  const build = path.join(os.homedir(), 'Projects/SemSearch/target/release/semsearch');
   return fs.existsSync(build) ? build : 'semsearch';
 }
 
@@ -192,11 +192,11 @@ function watchFolder(folder, output) {
 
 function activate(context) {
   context.subscriptions.push(
-    vscode.commands.registerCommand('semanticSearch.code', () => run('code')),
-    vscode.commands.registerCommand('semanticSearch.all', () => run('all')),
+    vscode.commands.registerCommand('semsearch.code', () => run('code')),
+    vscode.commands.registerCommand('semsearch.all', () => run('all')),
   );
-  if (!vscode.workspace.getConfiguration('semanticSearch').get('watch')) return;
-  const output = vscode.window.createOutputChannel('Semantic Search');
+  if (!vscode.workspace.getConfiguration('semsearch').get('watch')) return;
+  const output = vscode.window.createOutputChannel('SemSearch');
   const watchers = new Map();
   const add = (folder) => watchers.set(folder.uri.toString(), watchFolder(folder, output));
   (vscode.workspace.workspaceFolders || []).forEach(add);

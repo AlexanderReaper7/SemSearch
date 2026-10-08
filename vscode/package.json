@@ -1,6 +1,6 @@
 {
-  "name": "semantic-search",
-  "displayName": "Semantic Search",
+  "name": "semsearch",
+  "displayName": "SemSearch",
   "description": "Semantic search over code through semsearch and the local hister instance",
   "version": "0.1.0",
   "publisher": "local",
@@ -10,21 +10,21 @@
   "activationEvents": ["onStartupFinished"],
   "contributes": {
     "commands": [
-      { "command": "semanticSearch.code", "title": "Semantic Search: Code" },
-      { "command": "semanticSearch.all", "title": "Semantic Search: Everything" }
+      { "command": "semsearch.code", "title": "SemSearch: Code" },
+      { "command": "semsearch.all", "title": "SemSearch: Everything" }
     ],
     "keybindings": [
-      { "command": "semanticSearch.code", "key": "ctrl+alt+f" }
+      { "command": "semsearch.code", "key": "ctrl+alt+f" }
     ],
     "configuration": {
-      "title": "Semantic Search",
+      "title": "SemSearch",
       "properties": {
-        "semanticSearch.binary": {
+        "semsearch.binary": {
           "type": "string",
           "default": "",
           "description": "Path to semsearch. Empty means the repo's release build, then PATH."
         },
-        "semanticSearch.watch": {
+        "semsearch.watch": {
           "type": "boolean",
           "default": true,
           "description": "Re-index an open folder's code 10 s after a file in it changes."

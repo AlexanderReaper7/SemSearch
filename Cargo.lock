@@ -1068,7 +1068,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "semantic-search"
+name = "semsearch"
 version = "0.1.0"
 dependencies = [
  "anyhow",

@@ -42,11 +42,11 @@ hister's `import browser-history` does the opposite: `importDB` in `cmd/browser.
 
 A separate repository because it has two consumers, VS Code and the agents, so neither nixcfg nor the agents repository owns it. The same pattern as bw-app-gate.
 
-The name is known to be extremely generic. Kept because it says what the thing is.
+The name is known to be extremely generic. Kept because it says what the thing is. Superseded on 2026-10-08, when the project became SemSearch (below).
 
 ## 2026-09-26 - Prototype: three unmodified hister instances
 
-hister v0.20.0 from its upstream flake, one instance per source, configs in `prototype/`: web on `:4433`, files on `:4434`, code on `:4435`. Each keeps its data in `~/.local/share/semantic-search/<source>/`. `semsearch` (this repository, Rust) feeds the web and code instances and queries all three. The files instance indexes its configured directories on its own.
+hister v0.20.0 from its upstream flake, one instance per source, configs in `prototype/`: web on `:4433`, files on `:4434`, code on `:4435`. Each keeps its data in `~/.local/share/semsearch/<source>/`. `semsearch` (this repository, Rust) feeds the web and code instances and queries all three. The files instance indexes its configured directories on its own.
 
 No core patch was needed. Per-source instances work around the filter gap below, and code chunking happens before hister sees the text.
 
@@ -54,7 +54,7 @@ Code pieces:
 
 - `text-splitter` cuts each file into pieces of 400 to 3000 characters along the tree-sitter syntax tree (10 grammars), along headings for Markdown, and along blank lines otherwise. Below `max_context_length` hister embeds a piece as one vector. Since 2026-10-07 our own splitter cuts code (below).
 - A piece's URL is `vscode://file/<path>:<line>:1`. It is unique per piece, and a click in hister's web UI opens VS Code at that line.
-- `~/.local/share/semantic-search/code-state.json` maps each file to its hash and piece URLs. An unchanged file is skipped. A changed or removed file has its old pieces deleted, since line numbers in the URLs shift.
+- `~/.local/share/semsearch/code-state.json` maps each file to its hash and piece URLs. An unchanged file is skipped. A changed or removed file has its old pieces deleted, since line numbers in the URLs shift.
 - Files come from a walk that respects `.gitignore`, under every git repository at or one level below the given roots.
 
 No query or document prefix. On nixcfg's modules, no prefix and Qwen3's `Instruct: ...\nQuery: ` prefix both ranked 7 of 7 test queries correctly, with mean margins of 0.232 and 0.218.
@@ -215,6 +215,12 @@ The user's choices:
 - Whole repositories go to dev or test, 70/30, so a model that memorized a repository's layout is caught. The 26 existing queries are dev, since configurations were tuned on them.
 - No-answer queries are left out of MRR. Agent mode scores whether the agent replies that nothing answers; instant mode reports how often a no-answer query's best rerank score is below the best rerank score of the correct hit of answerable queries.
 - Queries carry a category and, for about 15%, an adversarial type. About 6% ask for images or sound. Nothing embeds media yet, so those count as misses and get their own row, never left out. Whether media gets a second embedding system (EmbeddingGemma 2) or is described as text is deferred.
+
+## 2026-10-08 - The project is SemSearch
+
+The user renamed the project from Semantic-Search to SemSearch, the binary's name already. Lowercase identifiers are `semsearch`: the crate, the VS Code extension and its `semsearch.*` settings, `~/.config/semsearch/`, nixcfg's flake input, sops secret and InferMux client key, and the agent skill. The GitHub repositories are `SemSearch` and `SemSearch-bench`.
+
+`~/.local/share/semantic-search/` moved whole to `~/.local/share/semsearch/`. hister keeps each corpus file's absolute path as its URL, so a seeded bench under it re-embeds its whole corpus at the next `seed`. bench-v2 had not been seeded yet, so the move cost it nothing; `bench`, `bench-chunk` and the two `bench-eg2-*` instances pay it only if reused. The corpus key became `SemSearch` with the checkout, and the `--shared` corpus checkouts of this repository had their `alternates` repointed. The prototype's backup, `~/.local/share/semantic-search.v0.20.0-backup`, kept its name. InferMux's usage history for the old client key stays under `semantic-search`.
 
 ## Closed 2026-10-05 - Build on hister or rewrite
 

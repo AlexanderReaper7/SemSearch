@@ -1,4 +1,4 @@
-# Semantic-Search
+# SemSearch
 
 Local semantic search over the user's code, files and Firefox history. Nothing leaves the machine: embeddings come from the llama.cpp server that nixcfg runs.
 
@@ -16,7 +16,7 @@ semsearch search -s code|web|files|all "query"  # SEMSEARCH_URL, default :4433
 semsearch search -s web --since 2w "query"      # also --before; a date, date and time, or age
 ```
 
-`vscode/` is a VS Code extension (Ctrl+Alt+F, "Semantic Search: Code") that calls `semsearch` and opens the hit at its line. Symlink it into `~/.vscode/extensions/local.semantic-search-0.1.0`.
+`vscode/` is a VS Code extension (Ctrl+Alt+F, "SemSearch: Code") that calls `semsearch` and opens the hit at its line. Symlink it into `~/.vscode/extensions/local.semsearch-0.1.0`.
 
 ## Where the pieces live
 
@@ -24,4 +24,4 @@ semsearch search -s web --since 2w "query"      # also --before; a date, date an
 |---|---|
 | indexers, chunkers, query clients | this repository |
 | embedding server, services, packaging | nixcfg, which takes this repository as a flake input |
-| agent skill | the agents repository, `agents/skills/semantic-search/` |
+| agent skill | the agents repository, `agents/skills/semsearch/` |

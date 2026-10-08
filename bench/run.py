@@ -38,13 +38,13 @@ HERE = Path(__file__).parent
 REPO = HERE.parent
 SOURCES = Path.home() / "Projects"
 # Everything the seeded instance owns. Nothing here touches the real one.
-SHARE = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "semantic-search"
+SHARE = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "semsearch"
 # SEMSEARCH_BENCH moves it, so a second embedder gets an instance of its own.
 # bench-v2 holds the corpus of 2026-10-07; `bench` the six repositories before it.
 BENCH = Path(os.environ.get("SEMSEARCH_BENCH", SHARE / "bench-v2"))
 PROJECTS = BENCH / "corpus"  # the pinned checkouts, one per repository
 XDG = BENCH / "xdg"  # semsearch's state file goes under this XDG_DATA_HOME
-DATA = XDG / "semantic-search"
+DATA = XDG / "semsearch"
 HISTER_DATA = BENCH / "hister"
 PORT = 4440
 HISTER = f"http://127.0.0.1:{PORT}"
@@ -53,7 +53,7 @@ INFERMUX = "http://127.0.0.1:5001"
 # Queries go the normal way, to the zbox. hister keeps the seeding endpoint's
 # fingerprint and warns at each start that the query endpoint differs.
 SEED_ENDPOINT = f"{INFERMUX}/upstream/Octen-Embedding-4B.Q8_0/v1/embeddings"
-CLIENT = "semantic-search"  # hister's key, as InferMux records it
+CLIENT = "semsearch"  # hister's key, as InferMux records it
 EMBEDDER = "Octen-Embedding-4B.Q8_0"
 # hister's settings in config/hister.yml, so the throughput run sends what it does.
 EMBED_BATCH = 8
@@ -64,7 +64,7 @@ CUTOFFS = (1, 3, 10)
 def secrets() -> dict[str, str]:
     """hister's InferMux keys, as the real instance gets them (nixcfg)."""
     out = {}
-    for line in Path("/run/secrets/rendered/semantic-search.env").read_text().splitlines():
+    for line in Path("/run/secrets/rendered/semsearch.env").read_text().splitlines():
         name, _, value = line.partition("=")
         out[name] = value
     return out
@@ -131,7 +131,7 @@ def checkout(args=None) -> None:
             git("-C", str(target), "sparse-checkout", "disable")
         git("-C", str(target), "checkout", "-q", "--force", "--detach", r["pin"])
         git("-C", str(target), "clean", "-q", "-fdx")
-        if repo == "Semantic-Search":
+        if repo == "SemSearch":
             shutil.rmtree(target / "bench", ignore_errors=True)
         files, size = excluded_bytes(target)
         print(f"{repo} at {r['pin'][:10]}" + (f", {files} files and {size / 1e6:.2f} MB excluded" if files else ""), file=sys.stderr)

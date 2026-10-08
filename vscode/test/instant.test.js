@@ -50,7 +50,7 @@ const type = (value) => {
 
 test.beforeEach(() => {
   fs.writeFileSync(log, '');
-  commands['semanticSearch.code']();
+  commands['semsearch.code']();
 });
 test.afterEach(() => pick.hide());
 

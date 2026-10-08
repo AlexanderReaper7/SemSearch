@@ -121,7 +121,7 @@ Live checks, each one able to fail:
 - A query naming a weekday or month ranks a file from that day above one from another.
 - A page captured by the extension shows its first visit and last visit, and so does a history-only entry.
 
-Then commit, and update the agent skill (`~/Projects/agents/agents/skills/semantic-search/SKILL.md`), which describes the post-search filter and its 100-hit limit.
+Then commit, and update the agent skill (`~/Projects/agents/agents/skills/semsearch/SKILL.md`), which describes the post-search filter and its 100-hit limit.
 
 ## Not in this plan
 
