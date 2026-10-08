@@ -2,3 +2,11 @@
 # hister writes its TUI defaults beside whichever config it loads.
 /config/tui.yaml
 __pycache__/
+# Benchmark data names and quotes the corpus, which includes private
+# repositories, so it lives in the private Semantic-Search-bench repository.
+# These paths are symlinks into its checkout beside this one.
+/bench/queries
+/bench/drafts
+/bench/results
+/bench/corpus.toml
+/bench/corpus-sizes.json
