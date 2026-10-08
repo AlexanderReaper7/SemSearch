@@ -16,17 +16,36 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.11"
-text-splitter = { version = "0.33", features = ["code", "markdown"] }
+text-splitter = { version = "0.33", features = ["markdown"] }
 tree-sitter = "0.27"
+tree-sitter-language = "0.1"
 tree-sitter-bash = "0.25"
+tree-sitter-c = "0.24.2"
 tree-sitter-c-sharp = "0.23"
+tree-sitter-clojure-orchard = "0.2.8"
+tree-sitter-cpp = "0.23.4"
+tree-sitter-dart = "0.2.0"
+tree-sitter-elixir = "0.3.5"
+tree-sitter-erlang = "0.20.0"
+tree-sitter-gdscript = "6.1.0"
 tree-sitter-go = "0.25"
+tree-sitter-haskell = "0.24.1"
 tree-sitter-java = "0.23"
 tree-sitter-javascript = "0.25"
+tree-sitter-kt = "0.1.0"
+tree-sitter-lua = "0.5.0"
 tree-sitter-nix = "0.3"
+tree-sitter-objc = "3.0.2"
+tree-sitter-ocaml = "0.26.0"
+tree-sitter-php = "0.25.1"
+tree-sitter-pwsh = "0.38.1"
 tree-sitter-python = "0.25"
+tree-sitter-ruby = "0.23.1"
 tree-sitter-rust = "0.24"
+tree-sitter-svelte-ng = "1.0.2"
+tree-sitter-swift = "0.7.4"
 tree-sitter-typescript = "0.23"
+tree-sitter-zig = "1.1.2"
 ureq = { version = "3.4", features = ["json"] }
 
 [profile.release]
@@ -36,3 +55,5 @@ codegen-units = 1
 
 [dev-dependencies]
 regex = "1.13.1"
+# CodeSplitter, for the comparison in examples/chunk_stats.rs.
+text-splitter = { version = "0.33", features = ["code"] }

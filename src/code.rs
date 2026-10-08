@@ -23,7 +23,7 @@ const MAX_FILE_BYTES: u64 = 512 * 1024;
 
 /// Raised whenever what a piece carries changes, so that every file is
 /// re-added once. A re-added piece whose text is unchanged is not re-embedded.
-const PIECE_FORMAT: u32 = 4;
+const PIECE_FORMAT: u32 = 5;
 
 /// Generated files that are text but never what a search is after.
 const SKIP_NAMES: &[&str] = &["Cargo.lock", "flake.lock", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock"];

@@ -52,7 +52,7 @@ No core patch was needed. Per-source instances work around the filter gap below,
 
 Code pieces:
 
-- `text-splitter` cuts each file into pieces of 400 to 3000 characters along the tree-sitter syntax tree (10 grammars), along headings for Markdown, and along blank lines otherwise. Below `max_context_length` hister embeds a piece as one vector.
+- `text-splitter` cuts each file into pieces of 400 to 3000 characters along the tree-sitter syntax tree (10 grammars), along headings for Markdown, and along blank lines otherwise. Below `max_context_length` hister embeds a piece as one vector. Since 2026-10-07 our own splitter cuts code (below).
 - A piece's URL is `vscode://file/<path>:<line>:1`. It is unique per piece, and a click in hister's web UI opens VS Code at that line.
 - `~/.local/share/semantic-search/code-state.json` maps each file to its hash and piece URLs. An unchanged file is skipped. A changed or removed file has its old pieces deleted, since line numbers in the URLs shift.
 - Files come from a walk that respects `.gitignore`, under every git repository at or one level below the given roots.
@@ -194,6 +194,14 @@ hister embeds every document twice, as its body and as a metadata chunk of title
 ## 2026-10-06 - VS Code searches the open checkout only
 
 The user: code search in VS Code covers the open folder, not the other repositories and not the folder's worktrees. `semsearch search --in <dir>` adds a `url_re` filter on the start of the pieces' URLs, and `<dir>/` only, so `repo` leaves out `repo-branch`; the extension passes every open folder, and nothing with no folder open. Scoping also helps rank: the filter applies before the vector search, so the 50 candidates all come from the checkout instead of five copies of one file from its worktrees. The quick pick shows one item per file at its best piece, labelled by its path in the folder and its line, with the date as its description; scores and source are gone.
+
+## 2026-10-07 - Code is cut along its syntax tree by our own splitter
+
+text-splitter's CodeSplitter cut between any two siblings, at the deepest level where the pieces fit. Each `///` line is a comment node of its own, so cuts fell inside doc blocks and between a doc and its method: 34.1% of its cuts in the bench corpus's Java, 12.9% in its Rust. In `ShiftService.java`, the answer to the `shift-full` query, the `book` method's doc ended up in two pieces, the half with `@throws ShiftFull` above the method and the rest at the end of the piece before it. Up to 16.4% of its cuts (Nix) fell mid-line.
+
+The user chose a splitter of our own on the tree-sitter tree, for code only (`code` in `src/chunk.rs`). text-splitter still cuts Markdown and plain text. Rejected: keeping CodeSplitter and moving each cut up to the comment block above it, which fixes comments but not a signature cut off from its body, and can push a piece over the maximum; reporting it upstream, which helps only after a release.
+
+A node that fits stays whole, and a cut falls only where a new line starts a named node, so a comment, attribute or annotation directly above a node stays with it and a closing `}` or `end` stays with what it closes. The doc comment on `code` has the rules, `bench/README.md` ("Chunking") the numbers and the tool that measures them. A parse that runs past `PARSE_BUDGET` progress callbacks is given up and the file is cut as text, since one grammar (tree-sitter-objc, issue #22) takes exponential time on some input. The budget counts callbacks instead of time, so a file cuts the same way on a busy machine.
 
 ## Closed 2026-10-05 - Build on hister or rewrite
 
