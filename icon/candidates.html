@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="favicon.svg">
+<title>SemSearch icon candidates</title>
+<style>
+  :root { color-scheme: dark; --page: #0b0d10; --panel: #13171c; --line: #262c34; --text: #d7dde4; --dim: #8a94a0; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text); font: 15px/1.45 system-ui, sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; background: #0b0d10ee; backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); padding: 14px 28px; display: flex; flex-wrap: wrap; gap: 28px; align-items: center; }
+  h1 { font-size: 18px; margin: 0 12px 0 0; font-weight: 600; }
+  .group { display: flex; gap: 8px; align-items: center; }
+  .group > span { color: var(--dim); font-size: 13px; margin-right: 2px; }
+  button.chip { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 5px 11px; cursor: pointer; font: inherit; font-size: 13px; }
+  button.chip[aria-pressed="true"] { border-color: var(--text); }
+  button.swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+  button.swatch[aria-pressed="true"] { border-color: #fff; }
+  label { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--dim); cursor: pointer; }
+  main { padding: 24px 28px 60px; }
+  section h2 { font-size: 14px; font-weight: 600; color: var(--dim); margin: 0 0 12px; text-transform: uppercase; letter-spacing: .06em; }
+
+  #tray { border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-bottom: 28px; background: var(--panel); }
+  #tray .empty { color: var(--dim); }
+  #tray .row { display: flex; flex-wrap: wrap; gap: 26px; align-items: flex-end; }
+  .pick { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .pick .name { font-size: 12px; color: var(--dim); }
+  .stage { border-radius: 10px; padding: 14px; display: flex; align-items: center; justify-content: center; }
+  .contexts { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 16px; margin-top: 20px; }
+
+  /* Firefox tab strip, dark */
+  .ff { background: #1c1b22; border-radius: 8px; padding: 8px 8px 0; }
+  .ff .tab { display: inline-flex; gap: 8px; align-items: center; background: #42414d; color: #fbfbfe; border-radius: 6px 6px 0 0; padding: 7px 14px; font-size: 12px; }
+  .ff .tab + .tab { background: transparent; color: #b0b0b8; }
+  /* VS Code extension list row, dark */
+  .vsc { background: #181818; border-radius: 8px; padding: 10px 12px; display: flex; gap: 12px; align-items: center; font-size: 13px; color: #cccccc; }
+  .vsc .meta b { color: #fff; font-weight: 600; } .vsc .meta div { color: #9d9d9d; font-size: 12px; }
+  .vsc.bar { padding: 0; gap: 0; flex-direction: column; width: 48px; align-items: center; }
+  .vsc.bar div { width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; }
+  .vsc.bar .on { border-left: 2px solid #0078d4; }
+
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(560px, 1fr)); gap: 18px; }
+  .card { border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; background: var(--panel); cursor: pointer; }
+  .card.sel { border-color: var(--accent-ui, #2dd4bf); box-shadow: 0 0 0 1px var(--accent-ui, #2dd4bf); }
+  .card h3 { margin: 0; font-size: 15px; font-weight: 600; display: flex; gap: 10px; align-items: baseline; }
+  .card h3 small { color: var(--dim); font-weight: 400; font-size: 12px; }
+  .card p { margin: 4px 0 14px; color: var(--dim); font-size: 13px; }
+  .card .sizes { display: flex; gap: 22px; align-items: flex-end; border-radius: 10px; padding: 16px; }
+  .card .sizes figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .card .sizes figcaption { font-size: 11px; opacity: .55; }
+  svg { display: block; }
+  #schemes { margin-bottom: 28px; }
+  #schemeGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(560px, 1fr)); gap: 18px; }
+  .swatches { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--dim); margin: 0 0 12px; }
+  .swatches i { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -2px; margin-right: 5px; border: 1px solid #ffffff22; }
+  .ctx { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-top: 12px; }
+  .t3row { background: #1a1b1b; border-radius: 6px; padding: 6px 12px; display: flex; gap: 8px; align-items: center; font-size: 13px; color: #e5e5e5; }
+  .ff-tab { background: #42414d; color: #fbfbfe; border-radius: 6px; padding: 7px 14px; font-size: 12px; display: inline-flex; gap: 8px; align-items: center; }
+  .vsc.mini { padding: 6px 12px; }
+  .nums { margin-top: 12px; font-size: 12px; color: var(--dim); }
+  .nums b { color: var(--text); }
+  .badge { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 9px; background: var(--accent-ui); color: #000; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SemSearch icons</h1>
+  <div class="group" id="palettes"><span>Scheme</span></div>
+  <div class="group" id="backs"><span>Background</span></div>
+  <div class="group">
+    <label><input type="checkbox" id="tile" checked> Tile</label>
+    <label title="Show everything in greyscale, to see whether the lit cell stands out by lightness and not only by hue"><input type="checkbox" id="grey"> Greyscale</label>
+    <label title="Divide sizes by devicePixelRatio, so 16 means 16 physical pixels"><input type="checkbox" id="device"> Physical pixels</label>
+  </div>
+  <div class="group" title="SQ in f(r) = r (1 - SQ (r/RW)²). The rim number is the radial scale where the cells meet the ring; 1 is no distortion."><span>9c distortion</span><input type="range" id="sq" min="0" max="0.3" step="0.001" value="0.2"><span id="sqv"></span></div>
+  <div class="group"><span>Compare size</span><input type="range" id="csize" min="16" max="256" step="8" value="128"><span id="csizev">128</span></div>
+</header>
+<main>
+  <section id="schemes">
+    <h2>Schemes, on <span id="provName"></span></h2>
+    <p style="color:var(--dim);font-size:13px;margin:-4px 0 14px">Click a scheme to apply it to the whole page. The numbers are WCAG contrast ratios. 1.0 means the same lightness: a lit cell at about 1.0 against its neighbors differs by hue alone and disappears in greyscale. WCAG asks 3:1 for graphics against what is next to them.</p>
+    <div id="schemeGrid"></div>
+  </section>
+  <section id="tray">
+    <h2>Compare <small style="text-transform:none;letter-spacing:0">(click cards to add or remove)</small></h2>
+    <div id="trayBody"></div>
+  </section>
+  <section>
+    <h2>Candidates</h2>
+    <div id="grid"></div>
+  </section>
+</main>
+
+<script>
+// Every mark is drawn on a 64-unit grid. Colors come from CSS variables on the
+// enclosing stage: --ink (strokes), --cell (embedding cells), --accent, --cut
+// (whatever is behind the mark).
+const LENS = `<circle cx="26" cy="26" r="17" fill="none" stroke="var(--ink)" stroke-width="5"/>
+  <path d="M38.5 38.5L52 52" stroke="var(--ink)" stroke-width="7" stroke-linecap="round"/>`;
+const n = (v) => +v.toFixed(2);
+// A point d units from the lens center, at deg degrees (0 is right, 90 is down).
+const polar = (d, deg) => [n(26 + d * Math.cos(deg * Math.PI / 180)), n(26 + d * Math.sin(deg * Math.PI / 180))];
+const dot = ([x, y], r, fill, op = 1) => `<circle cx="${x}" cy="${y}" r="${r}" fill="${fill}" opacity="${op}"/>`;
+const line = ([x, y], extra) => `<path d="M26 26L${x} ${y}" stroke-linecap="round" ${extra}/>`;
+// The four-point star, R from center to tip.
+const star = (cx, cy, R, fill) => {
+  const a = n(.076 * R), b = n(.324 * R);
+  return `<path d="M${cx} ${cy - R}C${cx + a} ${cy - b} ${cx + b} ${cy - a} ${cx + R} ${cy}C${cx + b} ${cy + a} ${cx + a} ${cy + b} ${cx} ${cy + R}C${cx - a} ${cy + b} ${cx - b} ${cy + a} ${cx - R} ${cy}C${cx - b} ${cy - a} ${cx - a} ${cy - b} ${cx} ${cy - R}Z" fill="${fill}"/>`;
+};
+
+// Embedding cells on a 7-unit pitch, cell (0, 0) centered in the lens. The
+// middle 3×3 keeps candidate 9's values; the rest are a fixed pseudo-random.
+const CORE = [.3, .75, .45, .55, 1, .25, .8, .35, .6];
+const cellOpacity = (i, j) => {
+  if (Math.abs(i) <= 1 && Math.abs(j) <= 1) return CORE[(j + 1) * 3 + i + 1];
+  const h = Math.sin(i * 12.9898 + j * 78.233) * 43758.5453;
+  return .15 + .7 * (h - Math.floor(h));
+};
+const cellFill = (i, j) => i === 0 && j === 0 ? 'var(--accent)'
+  : `color-mix(in srgb, var(--cell) ${Math.round(cellOpacity(i, j) * 80)}%, var(--cut))`;
+// Multicolor, the way Google's G splits its ring: --c1 to --c4 come from the
+// scheme. Each cell takes one of the four by a fixed pseudo-random pick.
+const cellHue = (i, j) => { const h = Math.sin(i * 39.37 + j * 11.71) * 9301.7; return Math.floor((h - Math.floor(h)) * 4); };
+const MULTI_CELL = 60; // top strength of a colored cell, in percent, below the lit one at 100
+const cellFill4 = (i, j) => i === 0 && j === 0 ? 'var(--accent)'
+  : `color-mix(in srgb, var(--c${cellHue(i, j) + 1}) ${Math.round(cellOpacity(i, j) * MULTI_CELL)}%, var(--cut))`;
+// The ring in four quarters, starting at the handle and going clockwise; the
+// handle takes the first color. Dashes 25.3 long so the seams overlap.
+const LENS4 = `<g transform="rotate(45 26 26)">${[0, 1, 2, 3].map((k) =>
+    `<circle cx="26" cy="26" r="17" fill="none" stroke="var(--c${k + 1})" stroke-width="5" pathLength="100" stroke-dasharray="25.3 74.7" stroke-dashoffset="${-25 * k}"/>`).join('')}</g>
+  <path d="M38.5 38.5L52 52" stroke="var(--c1)" stroke-width="7" stroke-linecap="round"/>`;
+// Working states, animated with SMIL so the rotation center stays in the
+// mark's own units. SPIN is one turn of the ring.
+const SPIN = 3;
+const spin = (body) => `<g>${body}<animateTransform attributeName="transform" type="rotate" from="0 26 26" to="360 26 26" dur="${SPIN}s" repeatCount="indefinite"/></g>`;
+const HANDLE = `<path d="M38.5 38.5L52 52" stroke="var(--c1)" stroke-width="7" stroke-linecap="round"/>`;
+// The ring as 48 short arcs, each blended in oklab between two neighboring
+// colors of the four, so the quarters run into each other.
+const RING_SOFT = (() => {
+  const N = 48; let out = '';
+  for (let k = 0; k < N; k++) {
+    const q = k / N * 4, a = Math.floor(q), t = Math.round((q - a) * 100);
+    out += `<circle cx="26" cy="26" r="17" fill="none" stroke="color-mix(in oklab, var(--c${(a + 1) % 4 + 1}) ${t}%, var(--c${a + 1}))" stroke-width="5" pathLength="${N}" stroke-dasharray="1.15 ${N - 1.15}" stroke-dashoffset="${-k}"/>`;
+  }
+  return `<g transform="rotate(45 26 26)">${out}</g>`;
+})();
+const LENS_IN = 14.6; // inside edge of the lens ring
+
+// Barrel distortion without magnification, f(r) = r (1 - SQ (r/RW)²): scale 1
+// at the center, radial scale 1 - 3 SQ at the rim, where world radius RW
+// lands. The page's distortion slider sets SQ; past 1/3 the rim folds over.
+let SQ = 0.2; // chosen 2026-10-08, rim ×0.40
+const rw = () => LENS_IN / (1 - SQ);
+const warp = (x, y) => {
+  const RW = rw();
+  const dx = x - 26, dy = y - 26, r = Math.hypot(dx, dy);
+  if (r === 0) return [26, 26];
+  const s = (r >= RW ? LENS_IN : r * (1 - SQ * (r / RW) ** 2)) / r;
+  return [n(26 + dx * s), n(26 + dy * s)];
+};
+function warpedCells() {
+  const RW = rw(), out = [];
+  for (let j = -3; j <= 3; j++) for (let i = -3; i <= 3; i++) {
+    const cx = 26 + i * 7, cy = 26 + j * 7;
+    if (Math.hypot(cx - 26, cy - 26) > RW + 2) continue;
+    // 9b's rounded square, rx 1.2, as an outline: a midpoint on each side, so
+    // the warp bends it, and five points on each corner arc.
+    const h = 2.75, rr = 1.2, ring = [];
+    [[1, -1, -90], [1, 1, 0], [-1, 1, 90], [-1, -1, 180]].forEach(([sx, sy, a0], k) => {
+      for (let t = 0; t <= 4; t++) {
+        const a = (a0 + t * 22.5) * Math.PI / 180;
+        ring.push([cx + sx * (h - rr) + rr * Math.cos(a), cy + sy * (h - rr) + rr * Math.sin(a)]);
+      }
+      const mid = [[cx + h, cy], [cx, cy + h], [cx - h, cy], [cx, cy - h]][k];
+      ring.push(mid);
+    });
+    out.push({ i, j, d: 'M' + ring.map(([x, y]) => warp(x, y).join(' ')).join('L') + 'Z' });
+  }
+  return out;
+}
+
+const ICONS = [
+  { id: 'neighbors', num: '4', name: 'Nearest neighbors', idea: 'A query point inside the lens, linked to its two nearest vectors; two farther points stay grey.',
+    svg: LENS + `<path d="M26 26L18.5 19.5M26 26L34 21" stroke="var(--accent)" stroke-width="2.2" stroke-linecap="round" opacity=".85"/>
+          <circle cx="26" cy="26" r="4" fill="var(--accent)"/>
+          <circle cx="18.5" cy="19.5" r="2.6" fill="var(--accent)"/><circle cx="34" cy="21" r="2.6" fill="var(--accent)"/>
+          <circle cx="20" cy="33.5" r="2.2" fill="var(--ink)" opacity=".45"/><circle cx="33.5" cy="33" r="2.2" fill="var(--ink)" opacity=".45"/>` },
+  { id: 'neighbors-tight', num: '4b', name: 'Nearest neighbors, tight', idea: 'Three neighbors hug the query; the other three sit out at the rim, small and grey. Distance alone says which are near.',
+    svg: LENS + [-72, 42, 165].map((a) => dot(polar(11.8, a), 1.9, 'var(--ink)', .4)).join('')
+       + dot([26, 26], 3.6, 'var(--accent)') + [-130, -15, 100].map((a) => dot(polar(7, a), 2.5, 'var(--accent)')).join('') },
+  { id: 'neighbors-measured', num: '4c', name: 'Nearest neighbors, measured', idea: 'Every point gets its distance drawn: short solid lines to the neighbors, long dashed ones to the rest.',
+    svg: LENS + [-72, 42, 165].map((a) => line(polar(11.8, a), 'stroke="var(--ink)" stroke-width="1.3" stroke-dasharray="1.4 1.8" opacity=".5"')).join('')
+       + [-130, -15, 100].map((a) => line(polar(7, a), 'stroke="var(--accent)" stroke-width="2.2"')).join('')
+       + [-72, 42, 165].map((a) => dot(polar(11.8, a), 1.9, 'var(--ink)', .45)).join('')
+       + dot([26, 26], 3.4, 'var(--accent)') + [-130, -15, 100].map((a) => dot(polar(7, a), 2.5, 'var(--accent)')).join('') },
+  { id: 'neighbors-disc', num: '4d', name: 'Nearest neighbors, disc', idea: 'A shaded disc marks the neighborhood; the neighbors are inside it, the rest are outside near the rim.',
+    svg: LENS + `<circle cx="26" cy="26" r="10" fill="var(--accent)" opacity=".2"/>`
+       + [-72, 42, 165].map((a) => dot(polar(12.3, a), 1.8, 'var(--ink)', .45)).join('')
+       + dot([26, 26], 3.6, 'var(--accent)') + [-130, -15, 100].map((a) => dot(polar(6.3, a), 2.5, 'var(--accent)')).join('') },
+  { id: 'radius', num: '5', name: 'Similarity radius', idea: 'A dashed ring around the query: what falls inside counts as a match.',
+    svg: LENS + `<circle cx="26" cy="26" r="9" fill="none" stroke="var(--accent)" stroke-width="2.4" stroke-dasharray="3 3"/>
+          <circle cx="26" cy="26" r="3.6" fill="var(--accent)"/>
+          <circle cx="31" cy="21" r="2" fill="var(--ink)" opacity=".85"/><circle cx="17" cy="32" r="2" fill="var(--ink)" opacity=".4"/>` },
+  { id: 'neighborhood', num: '6', name: 'Neighborhood', idea: 'No lens: scattered points, with a cluster of three ringed. Reads as embedding space.',
+    svg: `<circle cx="14" cy="17" r="3" fill="var(--ink)" opacity=".4"/><circle cx="50" cy="13" r="3" fill="var(--ink)" opacity=".4"/>
+          <circle cx="53" cy="44" r="3" fill="var(--ink)" opacity=".4"/><circle cx="11" cy="47" r="3" fill="var(--ink)" opacity=".4"/>
+          <circle cx="30" cy="54" r="3" fill="var(--ink)" opacity=".4"/>
+          <circle cx="33" cy="30" r="13" fill="none" stroke="var(--accent)" stroke-width="2.6" stroke-dasharray="4.5 3.5"/>
+          <circle cx="29" cy="26" r="3.8" fill="var(--accent)"/><circle cx="38.5" cy="29" r="3.2" fill="var(--ink)" opacity=".9"/>
+          <circle cx="32" cy="36" r="3.2" fill="var(--ink)" opacity=".9"/>` },
+  { id: 'vector', num: '9', name: 'Embedding', idea: 'A 3×3 patch of one embedding vector, one cell lit. Abstract; leans on the lens to mean search.',
+    svg: LENS + (() => {
+      const o = [.3, .75, .45, .55, 1, .25, .8, .35, .6]; let s = '';
+      o.forEach((a, i) => { const x = 16.25 + (i % 3) * 7, y = 16.25 + Math.floor(i / 3) * 7;
+        s += `<rect x="${x}" y="${y}" width="5.5" height="5.5" rx="1.2" fill="${i === 4 ? 'var(--accent)' : 'var(--ink)'}" opacity="${i === 4 ? 1 : a * .8}"/>`; });
+      return s; })() },
+  { id: 'vector-field', num: '9b', name: 'Embedding, continued', idea: 'The same cells at the same size, continued to fill the lens and cut off by its edge, as if the vector goes on.',
+    svg: (uid) => {
+      let s = `<defs><clipPath id="${uid}c"><circle cx="26" cy="26" r="${LENS_IN}"/></clipPath></defs><g clip-path="url(#${uid}c)">`;
+      for (let j = -2; j <= 2; j++) for (let i = -2; i <= 2; i++)
+        s += `<rect x="${23.25 + i * 7}" y="${23.25 + j * 7}" width="5.5" height="5.5" rx="1.2" style="fill:${cellFill(i, j)}"/>`;
+      return s + '</g>' + LENS; } },
+  { id: 'vector-optics', num: '9c', name: 'Embedding, through glass', idea: '9b with only barrel distortion: the middle stays at 1×, and the cells bend and squeeze toward the rim.',
+    svg: (uid) => `<defs><clipPath id="${uid}c"><circle cx="26" cy="26" r="${LENS_IN}"/></clipPath></defs>
+        <g clip-path="url(#${uid}c)">${warpedCells().map((c) => `<path d="${c.d}" style="fill:${cellFill(c.i, c.j)}"/>`).join('')}</g>` + LENS },
+  { id: 'optics-ring4', num: '9d', name: 'Through glass, four-color ring', idea: '9c with the ring split in four colors like Google\'s G. The cells stay grey, the lit one takes the first color.',
+    svg: (uid) => `<defs><clipPath id="${uid}c"><circle cx="26" cy="26" r="${LENS_IN}"/></clipPath></defs>
+        <g clip-path="url(#${uid}c)">${warpedCells().map((c) => `<path d="${c.d}" style="fill:${cellFill(c.i, c.j)}"/>`).join('')}</g>` + LENS4 },
+  { id: 'optics-cells4', num: '9e', name: 'Through glass, four-color cells', idea: '9c with the cells in four colors at up to 60%, the lit one at full strength. The ring stays one color.',
+    svg: (uid) => `<defs><clipPath id="${uid}c"><circle cx="26" cy="26" r="${LENS_IN}"/></clipPath></defs>
+        <g clip-path="url(#${uid}c)">${warpedCells().map((c) => `<path d="${c.d}" style="fill:${cellFill4(c.i, c.j)}"/>`).join('')}</g>` + LENS },
+  { id: 'optics-all4', num: '9f', name: 'Through glass, four colors', idea: '9d and 9e together: the ring and the cells both in four colors.',
+    svg: (uid) => `<defs><clipPath id="${uid}c"><circle cx="26" cy="26" r="${LENS_IN}"/></clipPath></defs>
+        <g clip-path="url(#${uid}c)">${warpedCells().map((c) => `<path d="${c.d}" style="fill:${cellFill4(c.i, c.j)}"/>`).join('')}</g>` + LENS4 },
+  { id: 'working-turn', num: '9g', name: 'Working, turning ring', idea: 'A working state for 9d: the four quarters turn around the lens, the handle keeps the first color. Animated.',
+    svg: (uid) => `<defs><clipPath id="${uid}c"><circle cx="26" cy="26" r="${LENS_IN}"/></clipPath></defs>
+        <g clip-path="url(#${uid}c)">${warpedCells().map((c) => `<path d="${c.d}" style="fill:${cellFill(c.i, c.j)}"/>`).join('')}</g>`
+        + spin(LENS4.replace(HANDLE, '')) + HANDLE },
+  { id: 'working-flow', num: '9h', name: 'Working, flowing ring', idea: 'Closer to Gemini: the four colors blend into each other around the ring, and the blend turns. Animated.',
+    svg: (uid) => `<defs><clipPath id="${uid}c"><circle cx="26" cy="26" r="${LENS_IN}"/></clipPath></defs>
+        <g clip-path="url(#${uid}c)">${warpedCells().map((c) => `<path d="${c.d}" style="fill:${cellFill(c.i, c.j)}"/>`).join('')}</g>`
+        + spin(RING_SOFT) + HANDLE },
+  { id: 'working-scan', num: '9i', name: 'Working, scanning cells', idea: '9h with a band of color sweeping across the cells, corner to corner, as if the search reads the vector. Animated.',
+    svg: (uid) => {
+      const cells = warpedCells();
+      // Each cell flashes the color of its diagonal, at a delay down the diagonal.
+      const wave = cells.filter((c) => c.i || c.j).map((c) => {
+        const k = ((c.i + c.j) % 4 + 4) % 4 + 1, at = n((c.i + c.j + 6) / 12 * 1.6 - 1.6);
+        return `<path d="${c.d}" fill="var(--c${k})" opacity="0"><animate attributeName="opacity" values="0;0;.85;0;0" keyTimes="0;.35;.5;.65;1" dur="1.6s" begin="${at}s" repeatCount="indefinite"/></path>`;
+      }).join('');
+      return `<defs><clipPath id="${uid}c"><circle cx="26" cy="26" r="${LENS_IN}"/></clipPath></defs>
+        <g clip-path="url(#${uid}c)">${cells.map((c) => `<path d="${c.d}" style="fill:${cellFill(c.i, c.j)}"/>`).join('')}${wave}</g>`
+        + spin(RING_SOFT) + HANDLE; } },
+  { id: 's-graph', num: '11', name: 'S of nodes', idea: 'The letter S drawn as a path through connected points. A monogram, no lens.',
+    svg: `<path d="M45 15L23 14L15.5 25L31 32L47 40L41.5 51L18 50" fill="none" stroke="var(--ink)" stroke-width="3.4" stroke-linejoin="round" opacity=".7"/>
+          ${[[23,14],[15.5,25],[31,32],[47,40],[41.5,51]].map(([x,y]) => `<circle cx="${x}" cy="${y}" r="4.2" fill="var(--ink)"/>`).join('')}
+          <circle cx="45" cy="15" r="5.2" fill="var(--accent)"/><circle cx="18" cy="50" r="5.2" fill="var(--accent)"/>` },
+  { id: 'spark', num: '12', name: 'Sparkle', idea: 'The four-point star every AI feature uses. Here for contrast; it says nothing specific.',
+    svg: LENS + `<path d="M26 15.5C26.8 22.6 29.4 25.2 36.5 26C29.4 26.8 26.8 29.4 26 36.5C25.2 29.4 22.6 26.8 15.5 26C22.6 25.2 25.2 22.6 26 15.5Z" fill="var(--accent)"/>` },
+  { id: 'spark-pair', num: '12b', name: 'Sparkle, pair', idea: 'A big star and a small one, off-center. Livelier than 12, and just as generic.',
+    svg: LENS + star(23.5, 28, 9.5, 'var(--accent)') + star(33, 18.5, 4.2, 'var(--ink)') },
+  { id: 'spark-solid', num: '12c', name: 'Sparkle, solid', idea: 'A filled lens with the star cut out, the way candidate 2 was. The heaviest of the three at 16 px.',
+    svg: `<circle cx="26" cy="26" r="19.5" fill="var(--accent)"/>
+          <path d="M39.5 39.5L52 52" stroke="var(--ink)" stroke-width="7.5" stroke-linecap="round"/>` + star(26, 26, 12, 'var(--cut)') },
+];
+
+// A scheme: the tile, the lens ring, the color the grey cells are mixed from
+// (into the tile), and the lit cell.
+const SCHEMES = [
+  { name: 'Teal on slate', note: 'The page default so far. Cool and neutral, close to GitHub dark.',
+    tile: '#151b23', ring: '#e6edf3', cell: '#e6edf3', lit: '#2dd4bf' },
+  { name: 'T3 plum', note: 'Sampled from the icon T3 gave the project: tile #37263b, glyph #ed6aff. Ring and cells a pale plum white.',
+    tile: '#37263b', ring: '#f4e9f6', cell: '#f4e9f6', lit: '#ed6aff' },
+  { name: 'T3 plum, magenta ring', note: 'The same, with the ring in the glyph color, the way T3 draws its letters.',
+    tile: '#37263b', ring: '#ed6aff', cell: '#f4e9f6', lit: '#ed6aff' },
+  { name: 'Sky on navy', note: 'Blue tile, blue-tinted cells, a sky-blue lit cell. Blends in among developer tools.',
+    tile: '#0f1a2b', ring: '#e6f0ff', cell: '#cfe3ff', lit: '#38bdf8' },
+  { name: 'Violet on ink', note: 'Violet-tinted cells and a violet lit cell. Softer than the T3 magenta.',
+    tile: '#17142a', ring: '#ece9fb', cell: '#ddd6fe', lit: '#a78bfa' },
+  { name: 'Amber on charcoal', note: 'Warm greys and an amber cell. Stands apart from the blue of most tool icons.',
+    tile: '#1c1814', ring: '#f3ede4', cell: '#e7dfd3', lit: '#f59e0b' },
+  { name: 'VS Code blue', note: 'VS Code\'s own #0078d4 on its panel grey. Darker than the other lit cells; see its numbers.',
+    tile: '#1f1f1f', ring: '#ffffff', cell: '#ffffff', lit: '#0078d4' },
+  { name: 'Amber four', note: 'Amber first, then coral, sky and lime, on the amber scheme\'s charcoal.',
+    tile: '#1c1814', ring: '#f3ede4', cell: '#e7dfd3', lit: '#f59e0b', multi: ['#f59e0b', '#fb7185', '#38bdf8', '#a3e635'] },
+  { name: 'Google four', note: 'Google\'s own blue, red, yellow and green on its dark-mode grey #202124. Blue first, as in its logo.',
+    tile: '#202124', ring: '#e8eaed', cell: '#e8eaed', lit: '#4285f4', multi: ['#4285f4', '#ea4335', '#fbbc04', '#34a853'] },
+  { name: 'Lime on moss', note: 'Terminal green on a green-black tile. The loudest at 16 px.',
+    tile: '#0f140c', ring: '#eef7e6', cell: '#e2efd6', lit: '#a3e635' },
+];
+const BACKS = [['Black', '#000000', false], ['GitHub dark', '#0d1117', false], ['VS Code', '#181818', false], ['Light', '#f6f8fa', true]];
+const DARK_INK = '#1f2328';
+const MULTI_MARKS = ['optics-ring4', 'optics-cells4', 'optics-all4'];
+const PROVISIONAL = 'vector-optics';
+
+// WCAG relative luminance and contrast, and the sRGB mix color-mix() does.
+const rgb = (hex) => [1, 3, 5].map((k) => parseInt(hex.slice(k, k + 2), 16));
+const mix = (a, b, t) => '#' + rgb(a).map((v, k) => Math.round(v * t + rgb(b)[k] * (1 - t)).toString(16).padStart(2, '0')).join('');
+const lum = (hex) => {
+  const [r, g, b] = rgb(hex).map((v) => (v /= 255) <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4);
+  return .2126 * r + .7152 * g + .0722 * b;
+};
+const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + .05) / (y + .05); };
+// The lit cell against the neighbor among its eight that is closest in lightness.
+const litVsCells = (sc, four) => {
+  let worst = Infinity;
+  for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++)
+    if (i || j) worst = Math.min(worst, contrast(sc.lit, four
+      ? mix(sc.multi[cellHue(i, j)], sc.tile, Math.round(cellOpacity(i, j) * MULTI_CELL) / 100)
+      : mix(sc.cell, sc.tile, Math.round(cellOpacity(i, j) * 80) / 100)));
+  return worst;
+};
+
+const state = Object.assign({ scheme: 0, back: 0, tile: true, grey: false, device: false, csize: 128, sq: 0.2, sel: ['vector-optics'] },
+  JSON.parse(localStorage.getItem('semsearch-icons') || '{}'));
+if (!SCHEMES[state.scheme]) state.scheme = 0;
+const save = () => localStorage.setItem('semsearch-icons', JSON.stringify(state));
+const pageBg = () => BACKS[state.back][1];
+
+// One icon as an <svg> at a CSS size, in scheme sc. ctxBg draws it on a fixed
+// dark background (the mock UIs) instead of the chosen one.
+let uidSeq = 0;
+function icon(def, size, ctxBg, sc = SCHEMES[state.scheme]) {
+  const light = !ctxBg && BACKS[state.back][2];
+  const ring = state.tile || !light ? sc.ring : DARK_INK;
+  const cell = state.tile || !light ? sc.cell : DARK_INK;
+  const cut = state.tile ? sc.tile : (ctxBg ?? pageBg());
+  const px = state.device ? size / devicePixelRatio : size;
+  // Each drawing gets its own id prefix, since clip paths and gradients are
+  // looked up document-wide and the same icon is drawn many times.
+  const mark = typeof def.svg === 'function' ? def.svg(`i${++uidSeq}`) : def.svg;
+  const body = state.tile
+    ? `<rect x="0.5" y="0.5" width="63" height="63" rx="14" fill="${sc.tile}" stroke="#ffffff1a"/><g transform="translate(7 7) scale(.78)">${mark}</g>`
+    : mark;
+  const four = (sc.multi ?? [sc.lit, cell, cell, cell]).map((c, k) => `--c${k + 1}:${c}`).join(';');
+  return `<svg width="${px}" height="${px}" viewBox="0 0 64 64" style="--ink:${ring};--cell:${cell};--accent:${sc.lit};--cut:${cut};${four}" aria-label="${def.name}">${body}</svg>`;
+}
+
+function controls() {
+  const pal = document.getElementById('palettes');
+  SCHEMES.forEach((sc, i) => {
+    const b = document.createElement('button');
+    b.className = 'swatch'; b.title = sc.name;
+    b.style.background = `radial-gradient(circle, ${sc.lit} 0 42%, ${sc.tile} 44%)`;
+    b.onclick = () => { state.scheme = i; render(); };
+    pal.appendChild(b);
+  });
+  const backs = document.getElementById('backs');
+  BACKS.forEach(([n], i) => {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.textContent = n;
+    b.onclick = () => { state.back = i; render(); };
+    backs.appendChild(b);
+  });
+  const tile = document.getElementById('tile'), grey = document.getElementById('grey'), dev = document.getElementById('device'), cs = document.getElementById('csize');
+  tile.onchange = () => { state.tile = tile.checked; render(); };
+  grey.onchange = () => { state.grey = grey.checked; render(); };
+  dev.onchange = () => { state.device = dev.checked; render(); };
+  cs.oninput = () => { state.csize = +cs.value; render(); };
+  const sq = document.getElementById('sq');
+  sq.oninput = () => { state.sq = +sq.value; render(); };
+}
+
+function render() {
+  save();
+  document.querySelectorAll('#palettes .swatch').forEach((b, i) => b.setAttribute('aria-pressed', i === state.scheme));
+  document.querySelectorAll('#backs .chip').forEach((b, i) => b.setAttribute('aria-pressed', i === state.back));
+  document.getElementById('tile').checked = state.tile;
+  document.getElementById('grey').checked = state.grey;
+  document.getElementById('device').checked = state.device;
+  document.getElementById('csize').value = state.csize;
+  document.getElementById('csizev').textContent = state.csize;
+  SQ = state.sq;
+  document.getElementById('sq').value = SQ;
+  document.getElementById('sqv').textContent = `SQ ${SQ.toFixed(3)}, rim ×${(1 - 3 * SQ).toFixed(2)}`;
+  document.querySelector('main').style.filter = state.grey ? 'grayscale(1)' : '';
+  const bg = pageBg();
+  document.documentElement.style.setProperty('--accent-ui', SCHEMES[state.scheme].lit);
+
+  const prov = ICONS.find((d) => d.id === PROVISIONAL);
+  document.getElementById('provName').textContent = `${prov.num}, ${prov.name}, and 9d to 9f for the four-color schemes`;
+  const sg = document.getElementById('schemeGrid');
+  const pairs = SCHEMES.flatMap((sc, i) => (sc.multi ? MULTI_MARKS : [PROVISIONAL]).map((id) => [sc, i, ICONS.find((d) => d.id === id)]));
+  sg.innerHTML = pairs.map(([sc, i, mark]) => { const prov = mark; const four = !!sc.multi; return `
+    <div class="card${i === state.scheme ? ' sel' : ''}" data-i="${i}">
+      <h3>${sc.name}${four ? ` <small>${mark.num}</small>` : ''}</h3>
+      <p>${sc.note}</p>
+      <div class="swatches">${[['tile', sc.tile], ['ring', sc.ring], ['cells', sc.cell], ['lit', sc.lit], ...(sc.multi ?? []).slice(1).map((c, k) => [`c${k + 2}`, c])].map(([k, v]) => `<span><i style="background:${v}"></i>${k} ${v}</span>`).join('')}</div>
+      <div class="sizes" style="background:${bg};color:${BACKS[state.back][2] ? '#1f2328' : '#e6edf3'}">
+        ${[128, 48, 32, 16].map((z) => `<figure>${icon(prov, z, null, sc)}<figcaption>${z}</figcaption></figure>`).join('')}
+      </div>
+      <div class="ctx">
+        <div class="t3row">${icon(prov, 20, '#1a1b1b', sc)}<span>SemSearch</span></div>
+        <span class="ff-tab">${icon(prov, 16, '#42414d', sc)}SemSearch</span>
+        <div class="vsc mini">${icon(prov, 42, '#181818', sc)}<div class="meta"><b>SemSearch</b><div>local</div></div></div>
+      </div>
+      <div class="nums">lit vs tile <b>${contrast(sc.lit, sc.tile).toFixed(1)}</b> · lit vs closest neighbor cell <b>${litVsCells(sc, four && mark.id !== 'optics-ring4').toFixed(2)}</b> · ring vs tile <b>${(four && mark.id !== 'optics-cells4' ? Math.min(...sc.multi.map((c) => contrast(c, sc.tile))) : contrast(sc.ring, sc.tile)).toFixed(1)}</b>${four && mark.id !== 'optics-cells4' ? ' (darkest quarter)' : ''}</div>
+    </div>`; }).join('');
+  sg.querySelectorAll('.card').forEach((el) => el.onclick = () => { state.scheme = +el.dataset.i; render(); });
+
+  const picked = state.sel.map((id) => ICONS.find((d) => d.id === id)).filter(Boolean);
+  const tray = document.getElementById('trayBody');
+  if (!picked.length) {
+    tray.innerHTML = '<div class="empty">Nothing picked. Click a candidate below.</div>';
+  } else {
+    tray.innerHTML = `
+      <div class="row">${picked.map((d) => `<div class="pick"><div class="stage" style="background:${bg}">${icon(d, state.csize)}</div><span class="name">${d.name}</span></div>`).join('')}</div>
+      <div class="row" style="margin-top:18px">${picked.map((d) => `<div class="pick"><div class="stage" style="background:${bg};padding:8px">${icon(d, 16)}</div></div>`).join('')}
+        <span class="name" style="color:var(--dim);font-size:12px;align-self:center">all at 16</span></div>
+      <div class="contexts">
+        <div class="ff">${picked.map((d) => `<span class="tab">${icon(d, 16, '#42414d')}SemSearch</span>`).join('')}</div>
+        ${picked.map((d) => `<div class="vsc">${icon(d, 42, '#181818')}<div class="meta"><b>SemSearch</b> <span style="color:#9d9d9d">0.1.0</span><div>Semantic search over code through semsearch and the local hister instance</div><div>local</div></div></div>`).join('')}
+        <div style="display:flex;gap:10px">${picked.map((d) => `<div class="vsc bar"><div>${icon(d, 24, '#181818')}</div><div class="on">${icon(d, 24, '#181818')}</div></div>`).join('')}</div>
+      </div>`;
+  }
+
+  const grid = document.getElementById('grid');
+  grid.innerHTML = ICONS.map((d) => `
+    <div class="card${state.sel.includes(d.id) ? ' sel' : ''}" data-id="${d.id}">
+      <h3>${d.name} <small>${d.num}</small>${d.id === PROVISIONAL ? ' <span class="badge">provisional</span>' : ''}</h3>
+      <p>${d.idea}</p>
+      <div class="sizes" style="background:${bg};color:${BACKS[state.back][2] ? '#1f2328' : '#e6edf3'}">
+        ${[128, 64, 32, 24, 16].map((z) => `<figure>${icon(d, z)}<figcaption>${z}</figcaption></figure>`).join('')}
+      </div>
+    </div>`).join('');
+  grid.querySelectorAll('.card').forEach((el) => el.onclick = () => {
+    const id = el.dataset.id;
+    state.sel = state.sel.includes(id) ? state.sel.filter((x) => x !== id) : [...state.sel, id];
+    render();
+  });
+}
+
+controls();
+render();
+</script>
+</body>
+</html>

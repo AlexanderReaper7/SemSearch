@@ -218,9 +218,13 @@ The user's choices:
 
 ## 2026-10-08 - The project is SemSearch
 
-The user renamed the project from Semantic-Search to SemSearch, the binary's name already. Lowercase identifiers are `semsearch`: the crate, the VS Code extension and its `semsearch.*` settings, `~/.config/semsearch/`, nixcfg's flake input, sops secret and InferMux client key, and the agent skill. The GitHub repositories are `SemSearch` and `SemSearch-bench`.
+The user renamed the project from Semantic-Search to SemSearch, the binary's name already. Reason: a shorter name is easier to type and to tell apart from the generic phrase. Lowercase identifiers are `semsearch`: the crate, the VS Code extension and its `semsearch.*` settings, `~/.config/semsearch/`, nixcfg's flake input, sops secret and InferMux client key, and the agent skill. The GitHub repositories are `SemSearch` and `SemSearch-bench`.
 
-`~/.local/share/semantic-search/` moved whole to `~/.local/share/semsearch/`. hister keeps each corpus file's absolute path as its URL, so a seeded bench under it re-embeds its whole corpus at the next `seed`. bench-v2 had not been seeded yet, so the move cost it nothing; `bench`, `bench-chunk` and the two `bench-eg2-*` instances pay it only if reused. The corpus key became `SemSearch` with the checkout, and the `--shared` corpus checkouts of this repository had their `alternates` repointed. The prototype's backup, `~/.local/share/semantic-search.v0.20.0-backup`, kept its name. InferMux's usage history for the old client key stays under `semantic-search`.
+`~/.local/share/semantic-search/` moved whole to `~/.local/share/semsearch/`. hister keeps each corpus file's absolute path as its URL, so a seeded bench under it re-embeds its whole corpus at the next `seed`. bench-v2 had not been seeded yet, so the move cost it nothing; `bench`, `bench-chunk` and the two `bench-eg2-*` instances pay it only if reused. The corpus key became `SemSearch` with the checkout, and the `--shared` corpus checkouts of this repository had their `alternates` repointed. The prototype's backup, `~/.local/share/semantic-search.v0.20.0-backup`, kept its name. InferMux's usage history for the old client key stays under `semantic-search`. The live code index pays the same cost once: its next run drops every piece under `~/Projects/Semantic-Search` and embeds the repository again under `~/Projects/SemSearch`.
+
+## 2026-10-08 - The icon is a grey lens over the embedding grid
+
+The icon is candidate 9c in `icon/candidates.html`, a magnifying glass whose lens distorts a grid of embedding cells, distortion 0.2 (rim ×0.40). `icon/favicon.svg` is the exported favicon. The extension icon, the favicon and any tile are colorless for now. Color appears only while a search runs: an aurora behind the search pill and the grid roaming under the lens, mocked in `icon/working.html`. The user liked the semi-translucent rainbow on black in Google's Gemini app.
 
 ## Closed 2026-10-05 - Build on hister or rewrite
 

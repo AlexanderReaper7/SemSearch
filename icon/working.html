@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="favicon.svg">
+<title>SemSearch working glow</title>
+<style>
+  :root { color-scheme: dark; --text: #e6edf3; --dim: #8b949e; --line: #30363d; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #000; color: var(--text); font: 14px/1.45 system-ui, sans-serif; }
+  header { position: sticky; top: 0; z-index: 10; display: flex; flex-wrap: wrap; gap: 18px; align-items: center; padding: 12px 22px; background: #0d1117; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; }
+  header label, header .group { display: flex; gap: 8px; align-items: center; color: var(--dim); font-size: 13px; }
+  header output { color: var(--text); min-width: 3.5em; }
+  select, button { background: #21262d; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; font: inherit; }
+  button.go { background: #238636; border-color: #2ea043; }
+  main { display: flex; gap: 28px; padding: 24px 22px; align-items: flex-start; }
+  figure { margin: 0; }
+  figcaption { color: var(--dim); font-size: 12px; margin-top: 8px; }
+
+  /* The glow: a low-resolution canvas stretched over the top of the view,
+     blurred, behind the content, faded in and out by opacity. */
+  .view { position: relative; overflow: hidden; isolation: isolate; }
+  .glow { position: absolute; left: 0; top: 0; width: 100%; z-index: -1; pointer-events: none;
+          filter: blur(28px); transform: scale(1.15); transform-origin: top center;
+          opacity: 0; transition: opacity .9s ease; }
+  .working .glow { opacity: 1; }
+  /* The WebGL styles draw opaque at device resolution, black where there is no
+     light, and screen over the view: black leaves the background as it is. */
+  .gl { position: absolute; left: 0; top: 0; width: 100%; z-index: -1; pointer-events: none;
+        mix-blend-mode: screen; opacity: 0; transition: opacity .9s ease; }
+  .working .gl { opacity: 1; }
+  .view canvas[hidden] { display: none; }
+
+  /* hister web UI mock */
+  .web { width: 1400px; height: 820px; background: #000; border: 1px solid var(--line); border-radius: 10px; }
+  .web .bar { display: flex; gap: 14px; align-items: center; padding: 28px 48px 0; }
+  .web .bar b { font-size: 20px; }
+  /* The search pill: opaque black so the glow never sits behind the text. It
+     holds the query and, while working, the status at its right end. */
+  .pill { display: flex; align-items: center; gap: 10px; background: #000; border: 1px solid #ffffff22; }
+  .pill input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: inherit; font: inherit; padding: 0; }
+  .web .pill { flex: 1; max-width: 760px; border-radius: 24px; padding: 12px 20px; color: var(--text); font-size: 16px; }
+  .web .list { padding: 26px 48px; display: grid; gap: 20px; max-width: 900px; }
+
+  /* VS Code sidebar mock */
+  .side { width: 340px; height: 820px; background: #000; border: 1px solid #2b2b2b; border-radius: 6px; font-size: 13px; }
+  .side .title { padding: 10px 16px; font-size: 11px; letter-spacing: .06em; color: #cccccc; }
+  .side .pill { margin: 0 12px; border-color: #3c3c3c; border-radius: 16px; padding: 6px 14px; color: #ccc; }
+  .side .list { padding: 12px 12px; display: grid; gap: 12px; }
+
+  /* The search button is icon 9c. While working it becomes the spinner: the
+     handle draws back into the lens, the cells dim around the lit one, and
+     the ring turns into a comet in the glow's colors. */
+  .go-mark { flex: none; background: none; border: 0; padding: 0; cursor: pointer; display: block; }
+  .go-mark svg { display: block; overflow: visible; }
+  .web .go-mark svg { width: 30px; height: 30px; }
+  .side .go-mark svg { width: 22px; height: 22px; }
+  .go-mark .seg { stroke: #e6edf3; transition: stroke .45s, opacity .45s; }
+  .working .go-mark.comet .seg { stroke: var(--hue); opacity: var(--op); }
+  .go-mark .ring { transform-box: fill-box; transform-origin: center; }
+  .go-mark .handle { stroke-dasharray: 19.1 19.1; stroke-dashoffset: 0; transition: stroke-dashoffset .35s ease .1s, opacity .1s; }
+  .working .go-mark.comet .handle { stroke-dashoffset: 19.1; opacity: 0; transition: stroke-dashoffset .35s ease, opacity .15s .25s; }
+  .go-mark .cell { transition: opacity .45s; }
+  .working .go-mark.comet .cell { opacity: .25; }
+  /* At rest the mark is grey, with the lit cell the brightest grey. Working,
+     the lit cell takes the comet head's color. */
+  .go-mark .lit { fill: #e6edf3; transition: fill .45s; }
+  .working .go-mark .lit { fill: var(--lit-hot); }
+  .working .go-mark.comet .lit { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .45; } }
+  .hit .t { color: #8ab4f8; font-size: 15px; }
+  .side .hit .t { color: #ccc; font-size: 13px; }
+  .hit .p { color: #6e7681; font-size: 12px; font-family: ui-monospace, monospace; }
+  .hit .s { color: #adbac7; font-size: 13px; }
+  @media (prefers-reduced-motion: reduce) { .working .go-mark .lit { animation: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Working glow</h1>
+  <button class="go" id="run">Search</button>
+  <label><input type="checkbox" id="hold"> Hold working</label>
+  <label>Style <select id="style"></select></label>
+  <label>Spinner <select id="spinner"></select></label>
+  <label>Colors <select id="pal"></select></label>
+  <div class="group">Cycle <input type="range" id="cycle" min="4" max="40" step="1"><output id="cyclev"></output></div>
+  <div class="group">Height <input type="range" id="height" min="20" max="90" step="1"><output id="heightv"></output></div>
+  <div class="group">Strength <input type="range" id="strength" min="0.2" max="1.2" step="0.05"><output id="strengthv"></output></div>
+  <div class="group">Spread <input type="range" id="spread" min="0" max="0.6" step="0.01"><output id="spreadv"></output></div>
+</header>
+<main>
+  <figure>
+    <div class="view web" id="web">
+      <canvas class="glow"></canvas>
+      <canvas class="gl"></canvas>
+      <div class="bar"><b>SemSearch</b><div class="pill"><input value="where do we retry failed uploads"><button class="go-mark" aria-label="Search"></button></div></div>
+      <div class="list"></div>
+    </div>
+    <figcaption>hister web UI, 1400 × 820</figcaption>
+  </figure>
+  <figure>
+    <div class="view side" id="side">
+      <canvas class="glow"></canvas>
+      <canvas class="gl"></canvas>
+      <div class="title">SEMSEARCH</div>
+      <div class="pill"><input value="retry failed uploads"><button class="go-mark" aria-label="Search"></button></div>
+      <div class="list"></div>
+    </div>
+    <figcaption>VS Code sidebar view, 340 wide, on #000 as in the user's theme</figcaption>
+  </figure>
+</main>
+<script>
+// oklab conversions, so hues blend without going muddy between them.
+const toLin = (c) => (c /= 255) <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4;
+const toSrgb = (c) => 255 * (c <= .0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - .055);
+function hexToOklab(hex) {
+  const [r, g, b] = [1, 3, 5].map((k) => toLin(parseInt(hex.slice(k, k + 2), 16)));
+  const l = Math.cbrt(.4122214708 * r + .5363485062 * g + .0514300430 * b);
+  const m = Math.cbrt(.2119034982 * r + .6806995451 * g + .1073969566 * b);
+  const s = Math.cbrt(.0883024619 * r + .2817188376 * g + .6299787005 * b);
+  return [.2104542553 * l + .7936177850 * m - .0040720468 * s,
+          1.9779984951 * l - 2.4285922050 * m + .4505937099 * s,
+          .0259040371 * l + .7827717662 * m - .8086757660 * s];
+}
+function oklabToRgb([L, A, B]) {
+  const l = (L + .3963377774 * A + .2158037573 * B) ** 3;
+  const m = (L - .1055613458 * A - .0638541728 * B) ** 3;
+  const s = (L - .0894841775 * A - 1.2914855480 * B) ** 3;
+  return [4.0767416621 * l - 3.3077115913 * m + .2309699292 * s,
+          -1.2684380046 * l + 2.6097574011 * m - .3413193965 * s,
+          -.0041960863 * l - .7034186147 * m + 1.7076147010 * s].map((c) => Math.max(0, Math.min(255, toSrgb(Math.max(0, c)))));
+}
+
+// A palette maps a position p (one turn per 1.0) to a color. Rainbow runs the
+// whole hue circle, as Gemini does; the others step through four colors.
+const rainbow = (p) => { const h = 2 * Math.PI * p; return oklabToRgb([.66, .15 * Math.cos(h), .15 * Math.sin(h)]); };
+const stops = (hexes) => {
+  const lab = hexes.map(hexToOklab);
+  return (p) => {
+    const q = ((p % 1) + 1) % 1 * lab.length, i = Math.floor(q), t = q - i;
+    const a = lab[i], b = lab[(i + 1) % lab.length];
+    // smoothstep, so each color holds a moment before it hands over
+    const s = t * t * (3 - 2 * t);
+    return oklabToRgb([0, 1, 2].map((k) => a[k] + (b[k] - a[k]) * s));
+  };
+};
+const PALETTES = {
+  'Rainbow, like Gemini': { fn: rainbow, hexes: null },
+  'Amber four': { fn: stops(['#f59e0b', '#fb7185', '#38bdf8', '#a3e635']), hexes: ['#f59e0b', '#fb7185', '#38bdf8', '#a3e635'] },
+  'Google four': { fn: stops(['#4285f4', '#ea4335', '#fbbc04', '#34a853']), hexes: ['#4285f4', '#ea4335', '#fbbc04', '#34a853'] },
+};
+
+const STYLES = ['Aurora', 'Glow, dithered (WebGL)', 'Glow, 8-bit canvas'];
+const state = Object.assign({ spinner: 'Moving grid', style: 'Aurora', pal: 'Rainbow, like Gemini', cycle: 14, height: 55, strength: 0.75, spread: 0.22, hold: false },
+  JSON.parse(localStorage.getItem('semsearch-glow') || '{}'));
+if (!PALETTES[state.pal]) state.pal = 'Rainbow, like Gemini';
+if (!STYLES.includes(state.style)) state.style = 'Aurora';
+const save = () => localStorage.setItem('semsearch-glow', JSON.stringify(state));
+
+// One frame of the glow into a small canvas; CSS stretches and blurs it.
+// u runs 0..1 across, v 0..1 down the glow's height.
+const GW = 64, GH = 40;
+const TAU = 2 * Math.PI;
+function paint(ctx, t) {
+  const img = ctx.createImageData(GW, GH), d = img.data, color = PALETTES[state.pal].fn;
+  const turn = t / state.cycle;
+  // Two darker hollows drifting under the top edge, as in the screenshots.
+  const holes = [[.5 + .3 * Math.sin(t * .23), .45 + .1 * Math.sin(t * .31 + 1)], [.2 + .25 * Math.sin(t * .17 + 2), .6 + .1 * Math.sin(t * .29)]];
+  for (let y = 0; y < GH; y++) {
+    const v = y / (GH - 1);
+    for (let x = 0; x < GW; x++) {
+      const u = x / (GW - 1);
+      // How far down the glow reaches here: it rises and falls across the width.
+      const edge = .78 + .14 * Math.sin(TAU * (u * .9 + t * .05)) + .08 * Math.sin(TAU * (u * 2.1 - t * .08) + 1);
+      let I = Math.max(0, 1 - v / edge) ** 1.7;
+      for (const [cx, cy] of holes) I *= 1 - .38 * Math.exp(-(((u - cx) / .22) ** 2 + ((v - cy) / .2) ** 2));
+      const p = turn + u * state.spread + .05 * Math.sin(TAU * (v * .8 + u * .5) + t * .3);
+      const [r, g, b] = color(p);
+      const k = (y * GW + x) * 4;
+      d[k] = r; d[k + 1] = g; d[k + 2] = b; d[k + 3] = Math.min(255, 255 * I * state.strength);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+// The shader. Mode 0 is the glow from paint() above, computed per device
+// pixel. Mode 1 is the aurora: three curtains hanging from the top, each with
+// a wavy, sharp lower edge, rays that bend with the folds, and light that
+// fades upward from the edge. Both end in a ±1 code triangular dither before
+// the browser rounds to 8 bits, which is what removes the bands.
+const FRAG = `#version 300 es
+precision highp float;
+uniform vec2 res;
+uniform float t, cycle, spread, strength;
+uniform int mode, pal;
+uniform vec3 lab[4];
+out vec4 o;
+const float TAU = 6.2831853;
+
+vec3 oklabToLin(vec3 c) {
+  float l = c.x + .3963377774 * c.y + .2158037573 * c.z;
+  float m = c.x - .1055613458 * c.y - .0638541728 * c.z;
+  float s = c.x - .0894841775 * c.y - 1.2914855480 * c.z;
+  l = l * l * l; m = m * m * m; s = s * s * s;
+  return max(vec3(0), vec3(4.0767416621 * l - 3.3077115913 * m + .2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - .3413193965 * s,
+    -.0041960863 * l - .7034186147 * m + 1.7076147010 * s));
+}
+vec3 toSrgb(vec3 c) { return mix(12.92 * c, 1.055 * pow(c, vec3(1. / 2.4)) - .055, step(.0031308, c)); }
+vec3 palette(float p) {
+  if (pal == 0) { float h = TAU * p; return oklabToLin(vec3(.66, .15 * cos(h), .15 * sin(h))); }
+  float q = fract(p) * 4.; int i = int(q); float f = fract(q); f = f * f * (3. - 2. * f);
+  return oklabToLin(mix(lab[i], lab[(i + 1) % 4], f));
+}
+float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
+}
+float fbm(vec2 p) { float a = .5, s = 0.; for (int k = 0; k < 4; k++) { s += a * noise(p); p *= 2.03; a *= .5; } return s / .9375; }
+
+vec3 glow(float u, float v) {
+  float edge = .78 + .14 * sin(TAU * (u * .9 + t * .05)) + .08 * sin(TAU * (u * 2.1 - t * .08) + 1.);
+  float I = pow(max(0., 1. - v / edge), 1.7);
+  vec2 h1 = vec2(.5 + .3 * sin(t * .23), .45 + .1 * sin(t * .31 + 1.));
+  vec2 h2 = vec2(.2 + .25 * sin(t * .17 + 2.), .6 + .1 * sin(t * .29));
+  I *= 1. - .38 * exp(-(pow((u - h1.x) / .22, 2.) + pow((v - h1.y) / .2, 2.)));
+  I *= 1. - .38 * exp(-(pow((u - h2.x) / .22, 2.) + pow((v - h2.y) / .2, 2.)));
+  float p = t / cycle + u * spread + .05 * sin(TAU * (v * .8 + u * .5) + t * .3);
+  // Same as the canvas: the sRGB color scaled by intensity, over black.
+  return toSrgb(palette(p)) * min(1., I * strength);
+}
+
+vec3 aurora(float u, float v) {
+  float X = u * res.x / res.y;   // across, in units of the glow's height
+  vec3 acc = vec3(0);
+  for (int k = 0; k < 3; k++) {
+    float fk = float(k);
+    float base = .28 + .12 * fk, bright = 1. - .25 * fk;
+    float sx = 1. + .35 * fk;    // nearer curtains have wider folds
+    // Small folds over a gentle sway: big smooth humps read as hills.
+    float fold = .045 * sin(X * 1.6 * sx + t * (.17 + .05 * fk) + fk * 2.)
+               + .03 * sin(X * 3.9 * sx - t * (.11 + .03 * fk) + fk * 5.)
+               + .09 * (fbm(vec2(X * 1.4 * sx + fk * 9., t * .08)) - .5);
+    float edge = base + fold;
+    float dy = edge - v;         // above the edge is positive
+    // Rays follow the folds, so they slant where the curtain bends.
+    float rx = X * sx + fold * 6.;
+    float r = fbm(vec2(rx * 9., t * .12 + fk * 4.));
+    r = smoothstep(.25, .85, r);
+    float reach = .05 + .3 * r;  // how far a ray climbs above the edge
+    // The lower edge is sharp on the front curtain and softer behind it.
+    float I = dy < 0. ? exp(-pow(dy / (.012 * (1. + 1.5 * fk)), 2.)) : exp(-dy / reach) * (.5 + .5 * exp(-dy / .03));
+    I *= .2 + .8 * r;
+    // The hue turns with time, runs across the width, and shifts going up.
+    float p = t / cycle + u * spread + fk * .09 + max(dy, 0.) * .5;
+    acc += palette(p) * I * bright;
+  }
+  // A faint wash of the same colors at the very top.
+  acc += palette(t / cycle + u * spread + .25) * .04 * exp(-v * 4.);
+  acc *= strength * .9;
+  return toSrgb(1. - exp(-acc));  // soft shoulder instead of clipping
+}
+
+void main() {
+  float u = gl_FragCoord.x / res.x, v = 1. - gl_FragCoord.y / res.y;
+  vec3 c = mode == 0 ? glow(u, v) : aurora(u, v);
+  // Triangular dither of ±1 code, fresh every frame.
+  vec2 q = gl_FragCoord.xy + fract(t * 7.31) * 113.;
+  c += (hash(q) + hash(q.yx * 1.7 + 3.1) - 1.) / 255.;
+  o = vec4(c, 1);
+}`;
+const VERT = `#version 300 es
+void main() { gl_Position = vec4(vec2(gl_VertexID & 1, gl_VertexID >> 1) * 4. - 1., 0, 1); }`;
+
+function makeGl(cv) {
+  const gl = cv.getContext('webgl2', { alpha: false, antialias: false });
+  if (!gl) return null;
+  const sh = (type, src) => {
+    const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+    return s;
+  };
+  const prog = gl.createProgram();
+  gl.attachShader(prog, sh(gl.VERTEX_SHADER, VERT)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FRAG));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+  const loc = Object.fromEntries(['res', 't', 'cycle', 'spread', 'strength', 'mode', 'pal', 'lab'].map((n) => [n, gl.getUniformLocation(prog, n)]));
+  return { gl, loc };
+}
+function draw(v, t) {
+  const { gl, loc } = v.g, cv = v.gcv;
+  const w = Math.round(cv.clientWidth * devicePixelRatio), h = Math.round(cv.clientHeight * devicePixelRatio);
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  gl.viewport(0, 0, w, h);
+  const P = PALETTES[state.pal];
+  gl.uniform2f(loc.res, w, h); gl.uniform1f(loc.t, t); gl.uniform1f(loc.cycle, state.cycle);
+  gl.uniform1f(loc.spread, state.spread); gl.uniform1f(loc.strength, state.strength);
+  gl.uniform1i(loc.mode, state.style === 'Aurora' ? 1 : 0); gl.uniform1i(loc.pal, P.hexes ? 1 : 0);
+  if (P.hexes) gl.uniform3fv(loc.lab, P.hexes.flatMap(hexToOklab));
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+let glError = '';
+const views = ['web', 'side'].map((id) => {
+  const el = document.getElementById(id), cv = el.querySelector('canvas.glow'), gcv = el.querySelector('canvas.gl');
+  cv.width = GW; cv.height = GH;
+  let g = null;
+  try { g = makeGl(gcv); } catch (e) { glError = e.message; }
+  if (!g && !glError) glError = 'this browser gave no WebGL2 context';
+  return { el, cv, ctx: cv.getContext('2d'), gcv, g };
+});
+if (glError) {
+  const n = document.createElement('div');
+  n.style.cssText = 'color:#f85149;font-size:13px;white-space:pre-wrap;flex-basis:100%';
+  n.textContent = `WebGL unavailable, showing the 8-bit canvas: ${glError}`;
+  document.querySelector('header').appendChild(n);
+}
+const usesGl = () => state.style !== 'Glow, 8-bit canvas' && views.every((v) => v.g);
+function render(t) { for (const v of views) usesGl() ? draw(v, t) : paint(v.ctx, t); }
+function layout() {
+  for (const { cv, gcv } of views) {
+    cv.style.height = gcv.style.height = `${state.height}%`;
+    cv.hidden = usesGl(); gcv.hidden = !usesGl();
+  }
+  // The comet's colors follow the palette.
+  for (const seg of document.querySelectorAll('.go-mark .seg'))
+    seg.style.setProperty('--hue', `rgb(${PALETTES[state.pal].fn(+seg.dataset.p).map(Math.round)})`);
+  document.documentElement.style.setProperty('--lit-hot', `rgb(${PALETTES[state.pal].fn(23 / 24).map(Math.round)})`);
+}
+
+// Painting runs only while some glow is visible, including its fade-out.
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let working = false, fadingUntil = 0, raf = 0;
+const t0 = performance.now();
+function frame(now) {
+  const t = reduced ? 0 : (now - t0) / 1000;
+  render(t);
+  raf = working || now < fadingUntil ? requestAnimationFrame(frame) : 0;
+}
+// Icon 9c, as on the candidates page with SQ 0.2 but grey at rest: the 7-pitch cells under a
+// barrel distortion, clipped to the lens. Copied, since both pages are
+// standalone prototypes.
+const LENS_IN = 14.6, SQ = 0.2, RW = LENS_IN / (1 - SQ);
+const CORE = [.3, .75, .45, .55, 1, .25, .8, .35, .6];
+const cellOpacity = (i, j) => {
+  if (Math.abs(i) <= 1 && Math.abs(j) <= 1) return CORE[(j + 1) * 3 + i + 1];
+  const h = Math.sin(i * 12.9898 + j * 78.233) * 43758.5453;
+  return .15 + .7 * (h - Math.floor(h));
+};
+const r2 = (v) => +v.toFixed(2);
+const warp = (x, y) => {
+  const dx = x - 26, dy = y - 26, r = Math.hypot(dx, dy);
+  if (r === 0) return [26, 26];
+  const s = (r >= RW ? LENS_IN : r * (1 - SQ * (r / RW) ** 2)) / r;
+  return [r2(26 + dx * s), r2(26 + dy * s)];
+};
+// The cells under a lens that sits at (ox, oy) on the grid. Cell (i, j) is
+// at i * 7, j * 7 on the grid, so at (0, 0) this is the icon.
+function cellsSvg(ox, oy) {
+  let cells = '';
+  const lo = (o) => Math.floor((o - RW - 4) / 7), hi = (o) => Math.ceil((o + RW + 4) / 7);
+  for (let j = lo(oy); j <= hi(oy); j++) for (let i = lo(ox); i <= hi(ox); i++) {
+    const cx = 26 + i * 7 - ox, cy = 26 + j * 7 - oy;
+    if (Math.hypot(cx - 26, cy - 26) > RW + 4) continue;
+    const h = 2.75, rr = 1.2, pts = [];
+    [[1, -1, -90], [1, 1, 0], [-1, 1, 90], [-1, -1, 180]].forEach(([sx, sy, a0], k) => {
+      for (let t = 0; t <= 4; t++) {
+        const a = (a0 + t * 22.5) * Math.PI / 180;
+        pts.push([cx + sx * (h - rr) + rr * Math.cos(a), cy + sy * (h - rr) + rr * Math.sin(a)]);
+      }
+      pts.push([[cx + h, cy], [cx, cy + h], [cx - h, cy], [cx, cy - h]][k]);
+    });
+    const d = 'M' + pts.map(([x, y]) => warp(x, y).join(' ')).join('L') + 'Z';
+    const lit = i === 0 && j === 0;
+    cells += lit ? `<path class="lit" d="${d}"/>`
+      : `<path class="cell" d="${d}" style="fill:color-mix(in srgb, #e6edf3 ${Math.round(cellOpacity(i, j) * 80)}%, #000)"/>`;
+  }
+  return cells;
+}
+function markSvg(uid) {
+  // The ring as 24 arcs from 45°, clockwise. Working, arc k takes palette
+  // position k/24 and opacity rising to the last one, the comet's head.
+  const N = 24;
+  let segs = '';
+  for (let k = 0; k < N; k++)
+    segs += `<circle class="seg" data-p="${k / N}" style="--op:${(.08 + .92 * (k / (N - 1)) ** 1.6).toFixed(3)}" cx="26" cy="26" r="17" fill="none" stroke-width="5" pathLength="100" stroke-dasharray="${100 / N + .4} 100" stroke-dashoffset="${-100 * k / N}"/>`;
+  return `<svg viewBox="5 5 52 52"><defs><clipPath id="${uid}"><circle cx="26" cy="26" r="${LENS_IN}"/></clipPath></defs>
+    <g clip-path="url(#${uid})"><g class="cells">${cellsSvg(0, 0)}</g></g>
+    <g class="ring"><g transform="rotate(45 26 26)">${segs}</g></g>
+    <path class="handle" d="M38.5 38.5L52 52" stroke="#e6edf3" stroke-width="7" stroke-linecap="round"/></svg>`;
+}
+document.querySelectorAll('.go-mark').forEach((b, k) => { b.innerHTML = markSvg(`lens${k}`); b.onclick = search; });
+document.querySelectorAll('.pill input').forEach((i) => i.onkeydown = (e) => { if (e.key === 'Enter') search(); });
+
+// The comet spins while working. On stop it finishes the turn it is in, so
+// the ring does not jump back to its start.
+const TURN = 1100;
+function spin(on) {
+  if (reduced) return;
+  for (const g of document.querySelectorAll('.go-mark .ring')) {
+    if (on) {
+      if (g.spin && g.spin.playState === 'running') g.spin.effect.updateTiming({ iterations: Infinity });
+      else g.spin = g.animate([{ transform: 'rotate(0deg)' }, { transform: 'rotate(360deg)' }], { duration: TURN, iterations: Infinity });
+    } else if (g.spin) {
+      g.spin.effect.updateTiming({ iterations: Math.max(1, Math.ceil(g.spin.currentTime / TURN)) });
+    }
+  }
+}
+
+// The moving grid: the lens hops from tile to tile as if looking for
+// something. Each hop is a short eased move of one or two tiles and a pause on
+// the tile; the lens stays within three tiles of home. On stop it finishes
+// the hop it is on, skips the pause, and goes to the lit tile at (0, 0), where
+// the icon is whole again.
+const TILE = 7, ROAM = 3;
+let pos = [0, 0], hop = null, gridRaf = 0, homing = false;
+function drawGrid() {
+  const html = cellsSvg(...pos);
+  for (const g of document.querySelectorAll('.go-mark .cells')) g.innerHTML = html;
+}
+function nextHop(now) {
+  const [x, y] = pos.map((v) => Math.round(v / TILE));
+  let to = [0, 0];
+  if (!homing) {
+    // Tiles nearer home weigh more, so the lens circles the lit tile with
+    // near misses instead of drifting off to the edge of its range.
+    const options = [];
+    for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++)
+      if ((dx || dy) && Math.abs(x + dx) <= ROAM && Math.abs(y + dy) <= ROAM)
+        options.push([[x + dx, y + dy], 1 / (1 + ((x + dx) ** 2 + (y + dy) ** 2) / 3)]);
+    let r = Math.random() * options.reduce((sum, [, w]) => sum + w, 0);
+    to = options.find(([, w]) => (r -= w) < 0)?.[0] ?? options[0][0];
+  }
+  const from = [...pos], dist = Math.hypot(to[0] * TILE - from[0], to[1] * TILE - from[1]) / TILE;
+  hop = { from, to: to.map((v) => v * TILE), t0: now, dur: 200 + 120 * dist, dwell: 180 + Math.random() * 380 };
+}
+function gridFrame(now) {
+  if (!hop) nextHop(now);
+  const k = Math.min(1, (now - hop.t0) / hop.dur);
+  const e = k < .5 ? 4 * k ** 3 : 1 - (2 - 2 * k) ** 3 / 2;   // ease in and out
+  pos = [0, 1].map((c) => hop.from[c] + (hop.to[c] - hop.from[c]) * e);
+  drawGrid();
+  if (now - hop.t0 >= hop.dur + (homing ? 0 : hop.dwell)) {
+    const home = homing && hop.to[0] === 0 && hop.to[1] === 0;
+    hop = null;
+    if (home) { homing = false; gridRaf = 0; return; }
+  }
+  gridRaf = requestAnimationFrame(gridFrame);
+}
+function grid(on) {
+  if (reduced) return;
+  if (on) { homing = false; if (!gridRaf) gridRaf = requestAnimationFrame(gridFrame); }
+  else if (gridRaf) homing = true;
+}
+const SPINNERS = ['Moving grid', 'Comet ring', 'Both'];
+const hasComet = () => state.spinner !== 'Moving grid', hasGrid = () => state.spinner !== 'Comet ring';
+function applySpinner() {
+  document.querySelectorAll('.go-mark').forEach((b) => b.classList.toggle('comet', hasComet()));
+  spin(working && hasComet()); grid(working && hasGrid());
+}
+
+function setWorking(on) {
+  working = on;
+  spin(on && hasComet()); grid(on && hasGrid());
+  document.querySelectorAll('.go-mark').forEach((b) => b.setAttribute('aria-label', on ? 'Searching' : 'Search'));
+  for (const v of views) v.el.classList.toggle('working', on);
+  if (!on) fadingUntil = performance.now() + 1000;
+  if (!raf) raf = requestAnimationFrame(frame);
+  for (const v of views) {
+    const list = v.el.querySelector('.list');
+    list.innerHTML = on ? '' : RESULTS;
+  }
+}
+
+const RESULTS = [
+  ['retry_upload, with backoff', 'src/sync/upload.rs:142', 'Failed chunks go back on the queue with a doubling delay, up to five tries.'],
+  ['UploadQueue::requeue', 'src/sync/queue.rs:88', 'A failed upload keeps its place and its attempt count.'],
+  ['docs: why uploads retry', 'docs/decisions.md:210', 'Retrying in the client, not the server, because the server cannot see a dropped connection.'],
+].map(([t, p, s]) => `<div class="hit"><div class="t">${t}</div><div class="p">${p}</div><div class="s">${s}</div></div>`).join('');
+
+// Controls
+const sel = document.getElementById('pal');
+sel.innerHTML = Object.keys(PALETTES).map((k) => `<option>${k}</option>`).join('');
+for (const [id, fmt] of [['cycle', (v) => `${v} s`], ['height', (v) => `${v}%`], ['strength', (v) => v.toFixed(2)], ['spread', (v) => v.toFixed(2)]]) {
+  const inp = document.getElementById(id), out = document.getElementById(id + 'v');
+  inp.value = state[id]; out.textContent = fmt(state[id]);
+  inp.oninput = () => { state[id] = +inp.value; out.textContent = fmt(state[id]); save(); layout(); if (!raf) requestAnimationFrame((n) => render((n - t0) / 1000)); };
+}
+sel.value = state.pal;
+sel.onchange = () => { state.pal = sel.value; save(); layout(); if (!raf) render(0); };
+const sty = document.getElementById('style');
+sty.innerHTML = STYLES.map((k) => `<option>${k}</option>`).join('');
+sty.value = state.style;
+sty.onchange = () => { state.style = sty.value; save(); layout(); if (!raf) render(0); };
+const spn = document.getElementById('spinner');
+spn.innerHTML = SPINNERS.map((k) => `<option>${k}</option>`).join('');
+if (!SPINNERS.includes(state.spinner)) state.spinner = SPINNERS[0];
+spn.value = state.spinner;
+spn.onchange = () => { state.spinner = spn.value; save(); applySpinner(); };
+const hold = document.getElementById('hold');
+hold.checked = state.hold;
+hold.onchange = () => { state.hold = hold.checked; save(); setWorking(hold.checked); };
+let timer = 0;
+function search() {
+  clearTimeout(timer); setWorking(true);
+  if (!state.hold) timer = setTimeout(() => setWorking(false), 3500);
+}
+document.getElementById('run').onclick = search;
+
+layout();
+applySpinner();
+setWorking(state.hold);
+</script>
+</body>
+</html>
