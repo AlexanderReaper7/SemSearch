@@ -228,10 +228,11 @@ The icon is candidate 9c in `icon/candidates.html`, a magnifying glass whose len
 
 ## 2026-10-14 - VS Code runs semsearch from PATH, and a folder inside a repository stands for it
 
-The coordinating session decided both on 2026-10-14, under the user's rule that a session decides when it is sure.
+The coordinating session decided these on 2026-10-14, under the user's rule that a session decides when it is sure.
 
 - The extension runs `semsearch` from PATH, which is nixcfg's build of main. A dev build runs only when `semsearch.binary` names it. Before, the extension preferred `~/Projects/SemSearch/target/release/semsearch` whenever that file existed, so a dev build from 2026-10-10 shadowed the installed one.
 - `index-code` takes a root inside a repository as that repository (`repositories` in `src/code.rs`). The extension runs `index-code` on the open folder after a change. For a folder such as `SemSearch/vscode` it found no repository, so every piece under the folder counted as gone and was deleted, and the next timer run embedded them again. `tests/index_code.rs` runs `index-code` on `repo/sub` against a fake hister and fails on any delete.
+- `.gitignore` leaves out `app/target`, `ui/node_modules` and `ui/dist`, the build output of the desktop window and its UI. `index-code` follows `.gitignore`, and a code search in VS Code returned pieces of CEF's headers, Svelte's sources and the built bundle.
 
 ## Closed 2026-10-05 - Build on hister or rewrite
 
@@ -249,3 +250,7 @@ Any code copied from hister carries AGPL-3.0 with it. Reading it for ideas does 
 ## Future - Phone
 
 Search from the OnePlus 8 Pro (Snapdragon 865, 12 GB). Not measured. Octen-4B Q8 needs 4.3 GB for weights, and an estimated 10-20 tok/s would make queries workable and on-phone indexing impractical. Either the phone queries the desktop over Tailscale, or it gets a smaller model, which means re-embedding everything with that model. Deferred 2026-09-26.
+
+## Verification
+
+- 2026-10-14: an agent emptied this file while it held the user's uncommitted changes, the one-color icon paragraph of 2026-10-08 and the whole 2026-10-10 entry, by opening it for writing before reading it. It was rebuilt from HEAD and the 28 pieces the code index held for it, and the result has the same blob hash, `1d06780`, as the user's file before the loss. The pieces and the rebuilt file are in `/tmp/semsearch-recover/` (`pieces.json`, `restored.md`), which systemd-tmpfiles removes after 10 days unused.
