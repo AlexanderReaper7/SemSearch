@@ -236,15 +236,25 @@ pub fn index(roots: &[PathBuf]) -> Result<()> {
         .filter(|p| !seen.contains(*p) && roots.iter().any(|r| r.canonicalize().is_ok_and(|r| p.starts_with(r))))
         .cloned()
         .collect();
-    if !gone.is_empty() {
-        let urls: Vec<String> = gone.iter().flat_map(|p| state.files[p].urls.clone()).collect();
+    let removed = gone.len();
+    // Saved after each batch, so a run stopped here resumes with the files it
+    // has not deleted yet. On 2026-10-14 three runs were stopped while deleting
+    // 40,058 pieces, and each started the deletes over.
+    let mut gone = gone.into_iter().peekable();
+    while gone.peek().is_some() {
+        let mut files = Vec::new();
+        let mut urls = Vec::new();
+        while let Some(p) = gone.next_if(|p| urls.is_empty() || urls.len() + state.files[p].urls.len() <= hister::MAX_BATCH) {
+            urls.extend(state.files[&p].urls.iter().cloned());
+            files.push(p);
+        }
         hister::delete(&server, &urls)?;
-        for p in &gone {
+        for p in &files {
             state.files.remove(p);
         }
         save(&state_file, &state)?;
     }
-    eprintln!("done: {changed_files} files changed, {added} pieces added, {} files removed", gone.len());
+    eprintln!("done: {changed_files} files changed, {added} pieces added, {removed} files removed");
     Ok(())
 }
 
