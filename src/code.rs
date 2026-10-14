@@ -50,8 +50,11 @@ fn repositories(roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut repos = Vec::new();
     for root in roots {
         let root = root.canonicalize().with_context(|| format!("{}", root.display()))?;
-        if root.join(".git").exists() {
-            repos.push(root);
+        // A directory inside a repository, such as the folder VS Code has
+        // open, stands for its repository. Taken as itself it held no
+        // repository, so every piece under it counted as gone and was deleted.
+        if let Some(repo) = root.ancestors().find(|dir| dir.join(".git").exists()) {
+            repos.push(repo.to_path_buf());
             continue;
         }
         for entry in std::fs::read_dir(&root)? {
@@ -62,6 +65,7 @@ fn repositories(roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
         }
     }
     repos.sort();
+    repos.dedup();
     Ok(repos)
 }
 

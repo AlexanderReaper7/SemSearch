@@ -2,7 +2,7 @@
   "name": "semsearch",
   "displayName": "SemSearch",
   "description": "Semantic search over code, files and web history through semsearch and the local hister instance",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "local",
   "private": true,
   "license": "AGPL-3.0-only",
@@ -25,7 +25,7 @@
         "semsearch.binary": {
           "type": "string",
           "default": "",
-          "description": "Path to semsearch. Empty means the repo's release build, then PATH."
+          "description": "Path to semsearch, such as a dev build. Empty means semsearch on PATH."
         },
         "semsearch.watch": {
           "type": "boolean",

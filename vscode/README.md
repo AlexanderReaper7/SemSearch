@@ -15,12 +15,12 @@ Both open a quick pick. A search starts from the second letter, 300 ms after the
 
 | setting | default | effect |
 |---|---|---|
-| `semsearch.binary` | `""` | path to `semsearch`; empty uses `~/Projects/SemSearch/target/release/semsearch` if it exists, then `semsearch` on PATH |
+| `semsearch.binary` | `""` | path to `semsearch`, such as a dev build at `~/Projects/SemSearch/target/release/semsearch`; empty uses `semsearch` on PATH |
 | `semsearch.watch` | `true` | re-index an open folder's code 10 s after its last file change; read at startup |
 
 ## Requirements
 
-- `semsearch` on PATH or at the path above. nixcfg installs it from this repository.
+- `semsearch` on PATH, or at the path in `semsearch.binary`. nixcfg installs it from this repository's main branch.
 - hister listening at `SEMSEARCH_URL`, default `http://127.0.0.1:4433`, as VS Code's environment sets it. On strix, nixcfg runs it as the `hister.service` user unit (`home/alexander/features/semsearch.nix`).
 - Indexed code. `semsearch-index-code.timer` indexes every repository under `~/Projects` every 15 minutes. With `semsearch.watch` on, `semsearch index-code <folder>` runs for each open folder after a change, and its output goes to the SemSearch output channel.
 
@@ -42,7 +42,9 @@ node --test vscode/test/*.test.js
 
 The tests run `extension.js` against a fake `vscode` module and a fake `semsearch` (`test/fake-semsearch.js`).
 
-`icon.png` is `icon/favicon.svg` with its color fixed to the dark theme's `#e6edf3`, since a PNG cannot follow the theme and `currentColor` without a color renders black:
+`icon.png` is `icon/favicon.svg` with its color fixed to the dark theme's `#e6edf3`, since a PNG cannot follow the theme and `currentColor` without a color renders black. It was rendered on 2026-10-14 from the one-color `favicon.svg` in the user's working tree, which was not committed then. The committed `favicon.svg` was the older version with a black lens.
+
+The render command:
 
 ```sh
 sed 's|<style>.*</style>|<style>svg{color:#e6edf3}</style>|' icon/favicon.svg > /tmp/semsearch-icon.svg

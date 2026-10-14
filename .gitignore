@@ -10,3 +10,7 @@ __pycache__/
 /bench/results
 /bench/corpus.toml
 /bench/corpus-sizes.json
+# Build output of the desktop window and its UI.
+/app/target
+/ui/node_modules
+/ui/dist

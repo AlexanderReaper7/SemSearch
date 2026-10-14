@@ -226,6 +226,13 @@ The user renamed the project from Semantic-Search to SemSearch, the binary's nam
 
 The icon is candidate 9c in `icon/candidates.html`, a magnifying glass whose lens distorts a grid of embedding cells, distortion 0.2 (rim ×0.40). `icon/favicon.svg` is the exported favicon. The extension icon, the favicon and any tile are colorless for now. Color appears only while a search runs: an aurora behind the search pill and the grid roaming under the lens, mocked in `icon/working.html`. The user liked the semi-translucent rainbow on black in Google's Gemini app.
 
+## 2026-10-14 - VS Code runs semsearch from PATH, and a folder inside a repository stands for it
+
+The coordinating session decided both on 2026-10-14, under the user's rule that a session decides when it is sure.
+
+- The extension runs `semsearch` from PATH, which is nixcfg's build of main. A dev build runs only when `semsearch.binary` names it. Before, the extension preferred `~/Projects/SemSearch/target/release/semsearch` whenever that file existed, so a dev build from 2026-10-10 shadowed the installed one.
+- `index-code` takes a root inside a repository as that repository (`repositories` in `src/code.rs`). The extension runs `index-code` on the open folder after a change. For a folder such as `SemSearch/vscode` it found no repository, so every piece under the folder counted as gone and was deleted, and the next timer run embedded them again. `tests/index_code.rs` runs `index-code` on `repo/sub` against a fake hister and fails on any delete.
+
 ## Closed 2026-10-05 - Build on hister or rewrite
 
 hister (Go, AGPL-3.0) covers web history and files: a Firefox extension that captures full page content, a keyword index, file parsers, MCP, a web UI and a TUI. It calls an OpenAI-compatible `/v1/embeddings` endpoint, so it can use `:5002`.

@@ -8,15 +8,11 @@
 
 const vscode = require('vscode');
 const { execFile } = require('child_process');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
 
+// The one on PATH is nixcfg's, built from main. A dev build is used only when
+// the setting names it, so a forgotten one cannot shadow it.
 function binary() {
-  const configured = vscode.workspace.getConfiguration('semsearch').get('binary');
-  if (configured) return configured;
-  const build = path.join(os.homedir(), 'Projects/SemSearch/target/release/semsearch');
-  return fs.existsSync(build) ? build : 'semsearch';
+  return vscode.workspace.getConfiguration('semsearch').get('binary') || 'semsearch';
 }
 
 // One semsearch process: its handle, to kill it, and its outcome. A slow
