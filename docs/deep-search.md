@@ -1,6 +1,6 @@
 # Deep search
 
-A small local agent that searches on the user's behalf, beside the instant search. Design stage, nothing is built. Started 2026-10-06.
+A small local agent that searches on the user's behalf, beside the instant search. Started 2026-10-06. `semsearch ask` is being built (2026-10-16); the agent loop so far exists only in `bench/agent.py`.
 
 ## What the user decided (2026-10-06)
 
@@ -15,13 +15,22 @@ A small local agent that searches on the user's behalf, beside the instant searc
 
 The instant list is what a user expects from a search box: the same text gives the same list, at once. The agent costs seconds and can be wrong, so it is something the user asks for, not something that replaces the list.
 
+## What the user decided (2026-10-16)
+
+- **The loop runs in semsearch**, as `semsearch ask`, in the library so the desktop window can call it without a process. The CLI and agents get it too.
+- **It prints progress and hits.** Text by default; `--json` gives JSON lines: a `step` event per tool call, a `hit` per kept place (path, lines, url, why), then `done`. The UI row can show progress during the seconds a deep search takes.
+- **All sources from the first version**: code, files and web, though the 2026-10-07 eval covers only code.
+- **12 model turns and 60 s.** At 60 s the model is told to answer with what it has checked; the last turn has no tools either way.
+- **The agent's model and the reranker share the card**, so the agent's searches keep their rerank, as in the 2026-10-07 eval, without one model evicting the other. Chosen over a per-query switch that skips the rerank (the earlier recommendation) and over semsearch running its own llama-server beside InferMux, which the warden would not see. How InferMux keeps both loaded is open.
+
+The model for the first version is Qwen3.5-4B Q4_K_M with a thinking budget of 256, the eval's best local result. That is the agent's pick, not a decision.
+
 ## Open
 
-- **UI.** VS Code's quick pick only lists items below its input and sits at the top of the window, so this layout likely needs a webview, unless the host can place a quick pick and show an item above the input. Not probed.
-- **Where the loop runs.** Recommended: in semsearch (`semsearch ask`, JSON events), so the CLI and agents get it too.
-- **Model, and whether to fine-tune.** In progress in a separate session. The reranker and the agent's model either share the 3080 (about 4 GB left for the model) or the model takes over the reranker's job (about 8.5 GB). Fine-tuning is not decided; where its training data may come from is under "Training data and terms of use" below.
-- **The reranker inside the agent.** The 3080 holds one model at a time, so a rerank per agent search would evict the agent's model. Recommended: the agent's searches skip the reranker; instant search keeps it.
-- **Time budget.** Not decided.
+- **UI.** The row above the input goes in the desktop window and the VS Code modal of `docs/decisions.md`, 2026-10-10. Not built.
+- **How the card is shared.** strix's GPU runs one model at a time (InferMux 0022, item 7). Keeping the reranker and the agent's model loaded together needs a change in InferMux.
+- **Fine-tuning.** Not decided; where its training data may come from is under "Training data and terms of use" below.
+- **An eval for files and web.** `bench/` has queries for code only.
 - **Follow-up questions.** Mentioned, not decided.
 
 ## Research, 2026-10-06
