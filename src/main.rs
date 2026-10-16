@@ -3,14 +3,9 @@
 //! Every source lives in one instance of the hister fork, and a source is a
 //! document type: `code`, `local` for files, `web`. See docs/decisions.md.
 
-mod chunk;
-mod hister;
-mod history;
-mod code;
-mod time;
-
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
+use semsearch::{Source, code, hister, history, time};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -18,42 +13,6 @@ use std::path::PathBuf;
 struct Cli {
     #[command(subcommand)]
     command: Command,
-}
-
-#[derive(Clone, Copy, ValueEnum, PartialEq, Eq, Debug)]
-pub enum Source {
-    Web,
-    Files,
-    Code,
-}
-
-impl Source {
-    /// The query filter that selects this source.
-    pub fn filter(self) -> &'static str {
-        match self {
-            Source::Web => "type:web",
-            Source::Files => "type:file",
-            Source::Code => "type:code",
-        }
-    }
-
-    /// The source of a document, from hister's numeric type.
-    pub fn of_type(t: Option<u64>) -> Option<Source> {
-        match t? {
-            0 => Some(Source::Web),
-            1 | 2 => Some(Source::Files),
-            3 => Some(Source::Code),
-            _ => None,
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Source::Web => "web",
-            Source::Files => "files",
-            Source::Code => "code",
-        }
-    }
 }
 
 #[derive(Subcommand)]
@@ -126,8 +85,11 @@ fn main() -> Result<()> {
                 let under = under.iter().map(std::path::absolute).collect::<std::io::Result<Vec<_>>>()?;
                 query = format!("{} {query}", code::under(&under));
             }
-            let hits = hister::search(source, &hister::Search { query: &query, since, before })?;
-            for hit in hits.into_iter().take(limit) {
+            let found = hister::search(source, &hister::Search { query: &query, since, before })?;
+            for note in &found.notes {
+                eprintln!("semsearch: {note}");
+            }
+            for hit in found.hits.into_iter().take(limit) {
                 if json {
                     println!("{}", serde_json::to_string(&hit)?);
                 } else {

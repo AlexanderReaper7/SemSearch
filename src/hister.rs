@@ -167,6 +167,14 @@ struct SemanticHit {
 /// with whatever else runs. See docs/decisions.md.
 const SLOW: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// A search's hits, best first, and what went wrong on the way without
+/// stopping it: a slow answer, or a fallback to fewer signals.
+#[derive(Serialize, Debug)]
+pub struct Found {
+    pub hits: Vec<Hit>,
+    pub notes: Vec<String>,
+}
+
 pub struct Search<'a> {
     pub query: &'a str,
     pub since: Option<i64>,
@@ -181,7 +189,7 @@ pub struct Search<'a> {
 /// a rerank the order is by similarity alone, and if the semantic search
 /// failed too, the keyword hits are returned without a similarity, so a
 /// degraded search still shows something.
-pub fn search(source: Option<Source>, s: &Search) -> Result<Vec<Hit>> {
+pub fn search(source: Option<Source>, s: &Search) -> Result<Found> {
     let server = server();
     let text = match source {
         Some(src) => format!("{} {}", src.filter(), s.query),
@@ -204,16 +212,17 @@ pub fn search(source: Option<Source>, s: &Search) -> Result<Vec<Hit>> {
         .with_context(|| format!("GET {server}/search"))?;
     let body: SearchResponse = resp.body_mut().read_json().context("search response")?;
     let took = started.elapsed();
+    let mut notes = Vec::new();
     if took > SLOW {
-        eprintln!("semsearch: search took {:.1} s", took.as_secs_f64());
+        notes.push(format!("search took {:.1} s", took.as_secs_f64()));
     }
     let keyword = body.documents.unwrap_or_default();
     let keyword_doc = |url: &str| keyword.iter().find(|d| d["url"].as_str() == Some(url));
     if let Some(err) = &body.semantic_error {
-        eprintln!("semsearch: semantic search failed, showing keyword hits: {err}");
+        notes.push(format!("semantic search failed, showing keyword hits: {err}"));
     }
     if let Some(err) = &body.rerank_error {
-        eprintln!("semsearch: reranking failed, ordering by similarity: {err}");
+        notes.push(format!("reranking failed, ordering by similarity: {err}"));
     }
 
     let mut semantic: Vec<Hit> = body
@@ -231,9 +240,10 @@ pub fn search(source: Option<Source>, s: &Search) -> Result<Vec<Hit>> {
     let reranked = body.reranked.unwrap_or_default();
     if reranked.is_empty() {
         if body.semantic_error.is_some() {
-            return Ok(keyword.iter().map(|d| hit(None, d, d["url"].as_str().unwrap_or_default(), String::new(), "")).collect());
+            let hits = keyword.iter().map(|d| hit(None, d, d["url"].as_str().unwrap_or_default(), String::new(), "")).collect();
+            return Ok(Found { hits, notes });
         }
-        return Ok(semantic);
+        return Ok(Found { hits: semantic, notes });
     }
     let mut hits = Vec::with_capacity(reranked.len() + semantic.len());
     for r in &reranked {
@@ -249,7 +259,7 @@ pub fn search(source: Option<Source>, s: &Search) -> Result<Vec<Hit>> {
         hits.push(h);
     }
     hits.extend(semantic);
-    Ok(hits)
+    Ok(Found { hits, notes })
 }
 
 fn hit(similarity: Option<f64>, doc: &Value, url: &str, chunk: String, doc_id: &str) -> Hit {
