@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
-use semsearch::{Source, code, hister, history, time};
+use semsearch::{Source, ask, code, hister, history, time};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -54,6 +54,22 @@ enum Command {
         #[arg(required = true, num_args = 1..)]
         query: Vec<String>,
     },
+    /// Deep search: a local model searches the code, reads what it finds,
+    /// and keeps only the places that answer, each with a line on why.
+    ///
+    /// The model is SEMSEARCH_LLM_MODEL at SEMSEARCH_LLM_URL, with
+    /// SEMSEARCH_LLM_KEY as its bearer key. See docs/deep-search.md.
+    Ask {
+        /// JSON lines: a step per tool call, a hit per kept place, then done.
+        #[arg(long)]
+        json: bool,
+        /// Only code under this directory for the searches and grep. Repeat
+        /// for several.
+        #[arg(long = "in", value_name = "DIR")]
+        under: Vec<PathBuf>,
+        #[arg(required = true, num_args = 1..)]
+        query: Vec<String>,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -68,6 +84,14 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::IndexCode { roots } => code::index(&roots),
         Command::ImportHistory { places } => history::import(&places),
+        Command::Ask { json, under, query } => {
+            let result = deep_search(&query.join(" "), &under, json);
+            if json && let Err(e) = &result {
+                println!("{}", serde_json::to_string(&ask::Event::Error { message: format!("{e:#}") })?);
+                std::process::exit(1);
+            }
+            result
+        }
         Command::Search { source, limit, json, since, before, under, query } => {
             let since = since.as_deref().map(time::parse_bound).transpose()?;
             let before = before.as_deref().map(time::parse_bound).transpose()?;
@@ -110,4 +134,31 @@ fn main() -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn deep_search(query: &str, under: &[PathBuf], json: bool) -> Result<()> {
+    let under = under.iter().map(std::path::absolute).collect::<std::io::Result<Vec<_>>>()?;
+    let corpus = ask::Corpus::indexed(&under)?;
+    let mut search = ask::hister_search(&under);
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut print = |event: ask::Event| {
+        if json {
+            println!("{}", serde_json::to_string(&event).expect("an event serializes"));
+            return;
+        }
+        match event {
+            ask::Event::Step { tool, args, .. } => eprintln!("  {tool} {args}"),
+            ask::Event::Hit { path, start, end, why, .. } => {
+                let path = path.display().to_string();
+                let path = path.strip_prefix(&home).map_or(path.clone(), |p| format!("~{p}"));
+                println!("{path}:{start}-{end}\n  {why}");
+            }
+            ask::Event::Note { message } | ask::Event::Error { message } => eprintln!("semsearch: {message}"),
+            ask::Event::Done { hits, turns, seconds, stopped } => {
+                let stopped = stopped.map(|s| format!(", stopped by the {s} limit")).unwrap_or_default();
+                eprintln!("{hits} hits, {turns} turns, {seconds:.1} s{stopped}");
+            }
+        }
+    };
+    ask::run(query, &corpus, ask::LIMITS, &mut ask::Llm::from_env(), &mut search, &mut print)
 }

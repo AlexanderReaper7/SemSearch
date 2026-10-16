@@ -1,6 +1,6 @@
 # Deep search
 
-A small local agent that searches on the user's behalf, beside the instant search. Started 2026-10-06. `semsearch ask` is being built (2026-10-16); the agent loop so far exists only in `bench/agent.py`.
+A small local agent that searches on the user's behalf, beside the instant search. Started 2026-10-06. `semsearch ask` (`src/ask.rs`, 2026-10-16) runs the loop of `bench/agent.py` for code. It reads its model from `SEMSEARCH_LLM_URL`, `SEMSEARCH_LLM_MODEL` and `SEMSEARCH_LLM_KEY`; the model is not in InferMux yet, and no UI calls it.
 
 ## What the user decided (2026-10-06)
 
@@ -19,7 +19,7 @@ The instant list is what a user expects from a search box: the same text gives t
 
 - **The loop runs in semsearch**, as `semsearch ask`, in the library so the desktop window can call it without a process. The CLI and agents get it too.
 - **It prints progress and hits.** Text by default; `--json` gives JSON lines: a `step` event per tool call, a `hit` per kept place (path, lines, url, why), then `done`. The UI row can show progress during the seconds a deep search takes.
-- **All sources from the first version**: code, files and web, though the 2026-10-07 eval covers only code.
+- **Code only in the first version.** The user first chose all sources, then code only once the live instance turned out to hold only code: on 2026-10-16 `type:web` and `type:file` each returned 0 of its 83,092 documents, so web and file tools would ship untested. Files and web get their own design later.
 - **12 model turns and 60 s.** At 60 s the model is told to answer with what it has checked; the last turn has no tools either way.
 - **The agent's model and the reranker share the card**, so the agent's searches keep their rerank, as in the 2026-10-07 eval, without one model evicting the other. Chosen over a per-query switch that skips the rerank (the earlier recommendation) and over semsearch running its own llama-server beside InferMux, which the warden would not see. How InferMux keeps both loaded is open.
 
@@ -30,7 +30,7 @@ The model for the first version is Qwen3.5-4B Q4_K_M with a thinking budget of 2
 - **UI.** The row above the input goes in the desktop window and the VS Code modal of `docs/decisions.md`, 2026-10-10. Not built.
 - **How the card is shared.** strix's GPU runs one model at a time (InferMux 0022, item 7). Keeping the reranker and the agent's model loaded together needs a change in InferMux.
 - **Fine-tuning.** Not decided; where its training data may come from is under "Training data and terms of use" below.
-- **An eval for files and web.** `bench/` has queries for code only.
+- **Files and web.** Not indexed in the live instance, and `bench/` has queries for code only.
 - **Follow-up questions.** Mentioned, not decided.
 
 ## Research, 2026-10-06
@@ -78,3 +78,18 @@ Below 4B nothing reached instant top-3; the sub-1B models found nothing. Qwen3.5
 The ceiling ran as fresh Claude Code sessions with only the four tools (bench/README.md, "Agent"); its transcripts are evaluation only, never training data (Training data, above). It found every query in every run, so the harness and tools suffice, and the 4B models' misses are the model's. Its precision understates it: the answer lists hold one or two places, and it also shows tests and exception classes that arguably count.
 
 Speed on the 3080 (`bench/results/2026-10-06-222644-llm-speed.json`): no dense model above 4B generates 100 tok/s at 16k context; Qwen3.5-4B does about 140.
+
+## How `semsearch ask` differs from the eval
+
+The agent's calls, 2026-10-16:
+
+- Paths are relative to the home directory, since the indexed repositories sit under `~/Projects` and `~/Desktop/scratch`; the eval had one corpus root. The prompt lists the repositories as such paths, and `git` takes one, or a bare repository name.
+- The tools see only files inside the repositories in `code-state.json`. grep looks in the `--in` directories, or every repository, rather than the whole root.
+- git refuses `--output`, `-O`/`--open-files-in-pager` and `--ext-diff`, which write a file or run a program.
+- A kept place whose file does not exist in the indexed code is left out, with a note, instead of shown.
+- A bare `path:N` is the line N; the eval's lenient score mapped it to the piece starting there.
+
+## Verification
+
+- 2026-10-16: `cargo test` covers the loop with a scripted model: a read then a hit with its why and URL, the forced answer without tools at the time and turn limits, reads and grep outside the indexed repositories refused, hits there left out, and git's refusals. Removing the repository check, the time check or the `--output` refusal each failed one test.
+- 2026-10-16, live: `semsearch ask --json --in ~/Projects/hister "where are failed embedding jobs retried"` against Qwen3.5-4B Q4_K_M on a llama-server on the CPU (the card held Warframe), reasoning budget 256. The embedder answered 503 and the reranker `gpu_no_room`, so searches fell back to keyword hits, each reported as a note. Two tool calls, then the time limit at 133.6 s; one hit, `embedding_queue.go:274-285`, the `retry` function, a correct place. It missed the hourly requeue at line 142. Not yet run through InferMux or on the GPU, and the eval has not been rerun on this loop.

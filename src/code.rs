@@ -96,7 +96,7 @@ fn dirty(repo: &Path) -> HashSet<PathBuf> {
     out.stdout.split(|&b| b == 0).filter(|e| e.len() > 3).map(|e| PathBuf::from(String::from_utf8_lossy(&e[3..]).as_ref())).collect()
 }
 
-fn url(path: &Path, line: usize, column: usize) -> String {
+pub(crate) fn url(path: &Path, line: usize, column: usize) -> String {
     format!("vscode://file{}:{line}:{column}", encode(path))
 }
 
@@ -127,6 +127,28 @@ fn piece_urls(path: &Path, pieces: &[chunk::Piece]) -> Vec<String> {
         .iter()
         .map(|p| if lines.insert(p.line) { url(path, p.line, 1) } else { url(path, p.line, p.column) })
         .collect()
+}
+
+/// The repositories the instance holds code from, by the state file. Empty
+/// before the first index-code.
+pub fn indexed_repositories() -> Result<Vec<PathBuf>> {
+    let state: State = match std::fs::read(state_path()) {
+        Ok(bytes) => serde_json::from_slice(&bytes).context("code state file")?,
+        Err(_) => return Ok(Vec::new()),
+    };
+    // The paths are sorted, so a repository's files follow each other.
+    let mut repos: Vec<PathBuf> = Vec::new();
+    for path in state.files.keys() {
+        if repos.last().is_some_and(|r| path.starts_with(r)) {
+            continue;
+        }
+        if let Some(repo) = path.ancestors().skip(1).find(|dir| dir.join(".git").exists()) {
+            repos.push(repo.to_path_buf());
+        }
+    }
+    repos.sort();
+    repos.dedup();
+    Ok(repos)
 }
 
 pub fn index(roots: &[PathBuf]) -> Result<()> {

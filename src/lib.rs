@@ -4,6 +4,7 @@
 //! Every source lives in one instance of the hister fork, and a source is a
 //! document type: `code`, `local` for files, `web`. See docs/decisions.md.
 
+pub mod ask;
 pub mod chunk;
 pub mod code;
 pub mod hister;

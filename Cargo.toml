@@ -8,10 +8,12 @@ anyhow = "1.0"
 clap = { version = "4.6", features = ["derive"] }
 ignore = "0.4"
 jiff = "0.2"
+regex = "1.13.1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.11"
+shlex = "2.0.1"
 text-splitter = { version = "0.33", features = ["markdown"] }
 tree-sitter = "0.27"
 tree-sitter-language = "0.1"
@@ -43,6 +45,7 @@ tree-sitter-swift = "0.7.4"
 tree-sitter-typescript = "0.23"
 tree-sitter-zig = "1.1.2"
 ureq = { version = "3.4", features = ["json"] }
+wait-timeout = "0.2.1"
 
 [profile.release]
 opt-level = 3
@@ -50,6 +53,5 @@ lto = true
 codegen-units = 1
 
 [dev-dependencies]
-regex = "1.13.1"
 # CodeSplitter, for the comparison in examples/chunk_stats.rs.
 text-splitter = { version = "0.33", features = ["code"] }

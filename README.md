@@ -14,6 +14,7 @@ semsearch index-code ~/Projects                 # chunk and sync every repositor
 semsearch import-history <profile>/places.sqlite # URL and title, never a fetch
 semsearch search -s code|web|files|all "query"  # SEMSEARCH_URL, default :4433
 semsearch search -s web --since 2w "query"      # also --before; a date, date and time, or age
+semsearch ask --json "query"                    # deep search, docs/deep-search.md
 ```
 
 `vscode/` is a VS Code extension (Ctrl+Alt+F, "SemSearch: Code") that calls `semsearch` and opens the hit at its line. Its settings and installation are in [vscode/README.md](vscode/README.md).
