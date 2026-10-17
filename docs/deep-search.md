@@ -1,6 +1,6 @@
 # Deep search
 
-A small local agent that searches on the user's behalf, beside the instant search. Started 2026-10-06. `semsearch ask` (`src/ask.rs`, 2026-10-16) runs the loop of `bench/agent.py` for code. It reads its model from `SEMSEARCH_LLM_URL`, `SEMSEARCH_LLM_MODEL` and `SEMSEARCH_LLM_KEY`; the model is not in InferMux yet, and no UI calls it.
+A small local agent that searches on the user's behalf, beside the instant search. Started 2026-10-06. `semsearch ask` (`src/ask.rs`, 2026-10-16) runs the loop of `bench/agent.py` for code. It reads its model from `SEMSEARCH_LLM_URL`, `SEMSEARCH_LLM_MODEL` and `SEMSEARCH_LLM_KEY`, InferMux at :5001 by default; InferMux serves Qwen3.5-4B-Q4_K_M, and no UI calls it.
 
 ## What the user decided (2026-10-06)
 

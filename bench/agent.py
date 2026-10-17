@@ -4,9 +4,8 @@
 """The deep search agent on the code search queries, against the seeded instance.
 See bench/README.md.
 
-    uv run bench/agent.py /srv/models/agent-candidates/Qwen3.5-4B-Q4_K_M.gguf --runs 5 --note "..."
-    uv run bench/agent.py --endpoint http://host/v1 --model-name name ...   # a server already running
-    uv run bench/agent.py --ask target/release/semsearch MODEL.gguf ...     # the loop of `semsearch ask`
+    SEMSEARCH_LLM_KEY=... uv run bench/agent.py Qwen3.5-4B-Q4_K_M --runs 5 --note "..."
+    SEMSEARCH_LLM_KEY=... uv run bench/agent.py --ask target/release/semsearch Qwen3.5-4B-Q4_K_M ...  # the loop of `semsearch ask`
 
 The agent gets the query and the instant results, then has read-only tools
 (search, grep, read, git) and answers with the hits it keeps, one per line as
@@ -14,9 +13,11 @@ The agent gets the query and the instant results, then has read-only tools
 its range holds the answer's line (found by anchor, as in run.py) and spans at
 most MAX_SPAN lines.
 
-Each model is served by its own llama-server on the card. That makes
-InferMux's warden unload the reranker once; the first search loads it back.
-Searches whose rerank failed are counted per run.
+Every model is one InferMux serves, reached at --endpoint (InferMux by
+default) with the key in SEMSEARCH_LLM_KEY; InferMux is the only program
+allowed to host a model (the user's rule, 2026-10-17). Its server flags live
+in InferMux's model config, not here. Searches whose rerank failed are counted
+per run.
 
 Writes bench/results/<time>-agent.json with every transcript and prints a summary.
 """
@@ -27,7 +28,6 @@ import os
 import re
 import shlex
 import shutil
-import socket
 import statistics
 import subprocess
 import sys
@@ -40,8 +40,6 @@ from pathlib import Path
 
 import run
 
-LLAMA = Path("/nix/store/0cw8p4njzwbzf2032fhcx9f9gf7r38sc-llama-cpp-0.5.0/bin")
-PORT = 5099
 CORPUS = run.PROJECTS
 MAX_TURNS = 12  # model calls per query, the last one without tools
 MAX_SPAN = 80  # lines a correct hit may span
@@ -328,51 +326,12 @@ def score(hits: list[dict], answers: list[tuple[str, int, str]]) -> dict:
             "found": first is not None, "found_code": "code" in marks, "marks": marks, "abstained": not hits}
 
 
-# Serving
-
-
-def free_card() -> None:
-    """InferMux's models off the card before the model's server loads. The
-    warden would only unload them once the server shows GPU load, which a
-    server that cannot allocate never does. The first search loads the
-    reranker back, at its fresh size."""
-    req = urllib.request.Request(f"{run.INFERMUX}/api/models/unload", b"", {"Authorization": f"Bearer {run.key()}"})
-    urllib.request.urlopen(req, timeout=60).read()
-    time.sleep(2)
-
-
-def serve(model: Path, ctx: int, extra: list[str]) -> subprocess.Popen:
-    with socket.socket() as s:
-        if s.connect_ex(("127.0.0.1", PORT)) == 0:
-            sys.exit(f"something already listens on :{PORT}")
-    free_card()
-    log = open(run.BENCH / "agent-llama.log", "a")
-    proc = subprocess.Popen([str(LLAMA / "llama-server"), "--port", str(PORT), "-m", str(model), "--jinja",
-                             "-ngl", "99", "-fa", "on", "--ctx-size", str(ctx), "--parallel", "1", *extra],
-                            stdout=log, stderr=log)
-    for _ in range(600):
-        if proc.poll() is not None:
-            sys.exit(f"llama-server exited with {proc.returncode}, see {run.BENCH / 'agent-llama.log'}")
-        try:
-            urllib.request.urlopen(f"http://127.0.0.1:{PORT}/health", timeout=1)
-            return proc
-        except Exception:
-            time.sleep(0.5)
-    proc.kill()
-    sys.exit("llama-server did not become healthy in 300 s")
-
-
-def stop(proc: subprocess.Popen) -> None:
-    proc.terminate()
-    try:
-        proc.wait(30)
-    except subprocess.TimeoutExpired:
-        proc.kill()
+# Running
 
 
 def warm_reranker() -> None:
-    """A search until it comes back reranked: the warden unloaded the reranker
-    when the model's server took the card, and the first rerank loads it."""
+    """A search until it comes back reranked: the chat model and the reranker
+    take turns on the card, and the first rerank loads it."""
     if not RERANK:
         return
     for _ in range(30):
@@ -384,7 +343,7 @@ def warm_reranker() -> None:
 
 def evaluate(one, name: str, qs: list[dict], runs: int, sampling: dict, parallel: int = 1) -> dict:
     """`one(query)` runs the agent once. Runs go `parallel` at a time; the
-    local models take 1, since one llama-server serves one slot."""
+    local models take 1, since InferMux runs them with one slot."""
     warm_reranker()
     starts = piece_starts()
 
@@ -566,20 +525,17 @@ def summarize(rows: list[dict]) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("models", nargs="*", type=Path, help="GGUF files, each served by its own llama-server")
-    ap.add_argument("--endpoint", help="an OpenAI-compatible base URL already serving, instead of GGUF files")
-    ap.add_argument("--model-name", default="default")
+    ap.add_argument("models", nargs="*", help="InferMux model names, run one after another")
+    ap.add_argument("--endpoint", default=f"{run.INFERMUX}/v1", help="InferMux's OpenAI-compatible base URL")
     ap.add_argument("--claude", metavar="MODEL", help="run the agent as a Claude Code session with this model (eval only, never training data)")
     ap.add_argument("--effort", default="high", help="Claude Code's effort level, with --claude")
-    ap.add_argument("--parallel", type=int, default=1, help="runs at a time, with --claude or --endpoint")
+    ap.add_argument("--parallel", type=int, default=1, help="runs at a time")
     ap.add_argument("--runs", type=int, default=5)
     ap.add_argument("--only", help="comma-separated query ids")
     ap.add_argument("--split", choices=("dev", "test", "all"), default="dev", help="test is for reporting, dev for tuning")
-    ap.add_argument("--ctx", type=int, default=32768)
     ap.add_argument("--temperature", type=float, default=0.6)
-    ap.add_argument("--think", action="store_true", help="turn the model's thinking on; cap it with --server-args \"--reasoning-budget N\"")
+    ap.add_argument("--think", action="store_true", help="turn the model's thinking on; InferMux's model config caps it")
     ap.add_argument("--max-tokens", type=int, default=1024, help="per model call, thinking included")
-    ap.add_argument("--server-args", default="", help="extra llama-server flags, e.g. MTP")
     ap.add_argument("--note", default="")
     ap.add_argument("--ask", metavar="SEMSEARCH", type=Path, help="run `SEMSEARCH ask --json` as the loop, with its own limits and sampling")
     ap.add_argument("--rescore", nargs="+", type=Path, help="score saved agent results again, in place")
@@ -587,8 +543,10 @@ def main() -> None:
     if args.rescore:
         rescore(args.rescore)
         return
-    if not args.models and not args.endpoint and not args.claude:
-        ap.error("give GGUF files, --endpoint or --claude")
+    if not args.models and not args.claude:
+        ap.error("give InferMux model names or --claude")
+    if args.models and not os.environ.get("SEMSEARCH_LLM_KEY"):
+        ap.error("set SEMSEARCH_LLM_KEY to the model's InferMux key")
 
     run.verify_checkout()
     qs = run.queries(None if args.split == "all" else args.split)
@@ -600,7 +558,7 @@ def main() -> None:
 
     result = {"kind": "agent", "when": datetime.now().isoformat(timespec="seconds"), "note": args.note,
               "setup": run.setup(), "max_turns": MAX_TURNS, "max_span": MAX_SPAN, "runs": args.runs,
-              "split": args.split, "queries": [q["id"] for q in qs], "server_args": args.server_args, "ctx": args.ctx, "models": []}
+              "split": args.split, "queries": [q["id"] for q in qs], "endpoint": args.endpoint, "models": []}
     if args.ask:
         # src/ask.rs sets its own; the forced answer turn runs without thinking.
         sampling = {"temperature": 0.6, "top_p": 0.95, "max_tokens": 1280, "think": "on, off for the answer turn"}
@@ -619,18 +577,9 @@ def main() -> None:
                 return lambda q: agent_ask(args.ask, endpoint, name, q)
             return lambda q: agent(endpoint, name, q, sampling)
 
-        if args.endpoint:
-            result["models"].append(evaluate(one(args.endpoint, args.model_name),
-                                             args.model_name, qs, args.runs, sampling, args.parallel))
         for model in args.models:
-            print(model.name, file=sys.stderr)
-            proc = serve(model, args.ctx, shlex.split(args.server_args))
-            endpoint = f"http://127.0.0.1:{PORT}/v1"
-            try:
-                result["models"].append(evaluate(one(endpoint, model.name),
-                                                 model.name, qs, args.runs, sampling))
-            finally:
-                stop(proc)
+            print(model, file=sys.stderr)
+            result["models"].append(evaluate(one(args.endpoint, model), model, qs, args.runs, sampling, args.parallel))
     report(result)
     print(run.save("agent", result))
 

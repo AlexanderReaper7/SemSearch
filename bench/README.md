@@ -92,21 +92,14 @@ Embedding endpoint throughput, batch 8, concurrency 2, which is what hister send
 
 ## Agent model speed
 
-`llm_speed.py` runs llama-bench (InferMux's llama.cpp build) on GGUF files: prompt processing (pp512) and generation (tg128) at context depths 0, 8192 and 16384, with the peak VRAM nvidia-smi attributes to the process. It runs outside InferMux, whose warden unloads its models while a foreign process uses the card.
-
-```sh
-uv run bench/llm_speed.py /srv/models/agent-candidates/*.gguf --note "..."
-```
-
-The user's minimum is 100 tok/s of generation (2026-10-06); it is read at depth 16384, since the agent's context fills with tool results. The first test of each model (depth 0) runs right after the load and is noisy; the deeper ones are not. The desktop holds about 3.4 GB of the card, which nvidia-smi does not list as compute processes, so about 6.5 GB is left for models.
+The user's minimum is 100 tok/s of generation (2026-10-06), read at 16k context, since the agent's context fills with tool results. `llm_speed.py` measured it with llama-bench outside InferMux; it is gone since InferMux became the only program allowed to host a model (2026-10-17), and its last results are in `bench/results/*-llm-speed.json` and git history. A speed test through InferMux would read llama-server's `timings` from its replies, without the peak VRAM.
 
 ## Agent
 
-`agent.py` runs the deep search agent on the queries: a llama-server per GGUF file (or `--endpoint` for a server already running), the instant results up front, read-only tools (search, grep, read, git), at most 12 model calls. It first unloads InferMux's models, since a server that cannot allocate never shows the GPU load that makes the warden yield; the first search loads the reranker back. Searches without rerank scores are counted as degraded; a run with many is not comparable.
+`agent.py` runs the deep search agent on the queries: each model named is one InferMux serves, reached with the key in `SEMSEARCH_LLM_KEY`; the instant results up front, read-only tools (search, grep, read, git), at most 12 model calls. InferMux is the only program allowed to host a model, evals included (the user's rule, 2026-10-17), so the model's server flags, such as the reasoning budget, are in its InferMux config. Searches without rerank scores are counted as degraded; a run with many is not comparable.
 
 ```sh
-uv run bench/agent.py /srv/models/agent-candidates/Qwen3.5-4B-Q4_K_M.gguf --runs 3 --think \
-  --max-tokens 1280 --server-args "--reasoning on --reasoning-budget 256" --note "..."
+SEMSEARCH_LLM_KEY=... uv run bench/agent.py Qwen3.5-4B-Q4_K_M --runs 3 --think --max-tokens 1280 --note "..."
 uv run bench/agent.py --rescore results/*-agent.json    # score saved answers again
 ```
 
