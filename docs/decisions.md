@@ -253,6 +253,13 @@ The user chose these on 2026-10-14. The retry delay and how errors count are the
 - **hister retries failed embedding jobs an hour after the failure, at startup and every 5 minutes** (`embeddingFailedRetryDelay` in `server/indexer/embedding_queue.go`, fork commit `9cb1c7da`). A job gets 5 attempts, 1, 2, 4 and 8 s apart, so an embedder outage longer than about 15 s left its jobs failed for good, and 58 documents had no vectors on 2026-10-14. The hour is the agent's pick: the attempts are spent within seconds and an outage lasts minutes to days, so a sooner retry mostly fails again, and an hour caps how long a document waits once the embedder is back. Connection errors count like any other error, also the agent's pick: the embedder client returns no error types to tell them apart, and a job that can never succeed costs 5 requests an hour. The retry stays in the fork.
 - **Nothing goes upstream** (the user, 2026-10-14). hister gets no report of the delete bug or the retry, and sqlite-vec none either.
 
+## 2026-10-14 - The VS Code extension is installed from a package of each version
+
+The user chose this on 2026-10-14, because VS Code owns an installed extension's folder, its version and its `installedTimestamp`, while the symlink was marked for removal on every start.
+
+- Each version of `vscode/` is packaged with vsce into `target/vsix/` and installed with `code --install-extension`, as `vscode/README.md` shows. `vscode/.vscodeignore` keeps the tests out of the package.
+- Before, `~/.vscode/extensions/local.semsearch-0.1.0` was a symlink to `vscode/`. VS Code 1.141.0 recorded it in `extensions.json` as 0.1.0 and never rewrote that, so with the manifest at 0.1.2 each start found no profile entry for 0.1.2 and wrote `local.semsearch-0.1.2` to `.obsolete`. It deleted nothing only because a symlinked extension has no `installedTimestamp`. The extension still loaded the code in `vscode/` on each reload.
+
 ## Closed 2026-10-05 - Build on hister or rewrite
 
 hister (Go, AGPL-3.0) covers web history and files: a Firefox extension that captures full page content, a keyword index, file parsers, MCP, a web UI and a TUI. It calls an OpenAI-compatible `/v1/embeddings` endpoint, so it can use `:5002`.

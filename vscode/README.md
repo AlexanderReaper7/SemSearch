@@ -26,13 +26,16 @@ Both open a quick pick. A search starts from the second letter, 300 ms after the
 
 ## Installation
 
-The extension is a symlink to this directory:
+Each version is packaged and installed, so VS Code keeps its own copy in `~/.vscode/extensions/local.semsearch-<version>` and records the version itself:
 
 ```sh
-ln -s ~/Projects/SemSearch/vscode ~/.vscode/extensions/local.semsearch-0.1.0
+cd vscode
+v=$(jq -r .version package.json)
+nix shell nixpkgs#vsce -c vsce package --out ../target/vsix/semsearch-$v.vsix
+code --install-extension ../target/vsix/semsearch-$v.vsix
 ```
 
-Then run "Developer: Reload Window". VS Code takes the version from `package.json`, not from the link's name, so the link keeps its name across version bumps and a reload picks up the new version.
+Then run "Developer: Reload Window". An edit to this directory reaches VS Code only through a new package and install, so bump `version` in `package.json` with each one; installing the same version again needs `--force`. `.vscodeignore` keeps `test/` out of the package.
 
 ## Development
 
