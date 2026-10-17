@@ -1,7 +1,7 @@
 //! A hister stand-in that keeps the documents it is sent.
 
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
@@ -11,6 +11,8 @@ pub struct Hister {
     pub docs: HashMap<String, Value>,
     /// Every batch op as `<op> <url>`, in order.
     pub ops: Vec<String>,
+    /// URLs whose add answers 500 and stores nothing.
+    pub fail: HashSet<String>,
 }
 
 /// A fake hister on a free port. `/api/batch` adds, gets and deletes
@@ -55,6 +57,7 @@ pub fn hister() -> (String, Arc<Mutex<Hister>>) {
                         let url = op["url"].as_str().unwrap().to_string();
                         h.ops.push(format!("{} {url}", op["op"].as_str().unwrap()));
                         match op["op"].as_str().unwrap() {
+                            "add" if h.fail.contains(&url) => json!({ "status": 500, "error": "failed on purpose" }),
                             "add" => {
                                 let mut doc = op.clone();
                                 doc.as_object_mut().unwrap().remove("op");

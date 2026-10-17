@@ -158,3 +158,23 @@ fn a_visit_that_reuses_a_deleted_id_is_imported() {
     drop(conn);
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn an_entry_that_failed_to_add_is_sent_again() {
+    let tmp = scratch("history-failed-add");
+    let (path, conn) = places(&tmp);
+    visit(&conn, "https://a.example/", "A", T0);
+    visit(&conn, "https://b.example/", "B", T0 + DAY_US);
+    let (server, hister) = common::hister();
+    hister.lock().unwrap().fail.insert("https://a.example/".into());
+    let data = tmp.join("data");
+    assert!(!run_import(&server, &data, &path).status.success());
+    assert!(!hister.lock().unwrap().docs.contains_key("https://a.example/"));
+
+    hister.lock().unwrap().fail.clear();
+    hister.lock().unwrap().ops.clear();
+    import(&server, &data, &path);
+    assert_eq!(ops(&hister, "add"), ["https://a.example/"]);
+    drop(conn);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
