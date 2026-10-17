@@ -41,6 +41,104 @@ const SEARCH_MAX: usize = 20;
 const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 const GIT_COMMANDS: [&str; 5] = ["blame", "diff", "grep", "log", "show"];
 
+/// The git options the model may pass, per subcommand, matched as git
+/// parses them. Everything else is refused, so an abbreviation git would
+/// expand (`--open=` for `--open-files-in-pager`) or a short option hidden
+/// in a group (`-iO cmd`) never reaches git.
+struct GitOptions {
+    /// Short options without a value, which may be grouped: `-in`.
+    flags: &'static str,
+    /// Short options with a value, attached or next: `-n5`, `-n 5`.
+    valued: &'static str,
+    /// Long options without a value.
+    long: &'static [&'static str],
+    /// Long options with a value, only as `--name=value`.
+    long_valued: &'static [&'static str],
+}
+
+const LOG_LONG: &[&str] = &[
+    "--abbrev-commit", "--all", "--cached", "--decorate", "--first-parent", "--follow", "--full-diff", "--graph",
+    "--ignore-all-space", "--merges", "--name-only", "--name-status", "--no-color", "--no-decorate", "--no-merges",
+    "--no-patch", "--numstat", "--oneline", "--patch", "--pretty", "--regexp-ignore-case", "--reverse", "--shortstat",
+    "--staged", "--stat", "--word-diff", "--function-context", "--find-renames",
+];
+const LOG_LONG_VALUED: &[&str] = &[
+    "--after", "--author", "--before", "--committer", "--date", "--diff-filter", "--format", "--grep", "--max-count",
+    "--pretty", "--since", "--skip", "--unified", "--until", "--word-diff",
+];
+
+fn git_options(command: &str) -> GitOptions {
+    match command {
+        "grep" => GitOptions {
+            flags: "EFGHIPchilnqvw",
+            valued: "ABCem",
+            long: &[
+                "--all-match", "--and", "--break", "--cached", "--count", "--extended-regexp", "--files-with-matches",
+                "--fixed-strings", "--heading", "--ignore-case", "--invert-match", "--line-number", "--not", "--or",
+                "--perl-regexp", "--word-regexp",
+            ],
+            long_valued: &["--after-context", "--before-context", "--context", "--max-count"],
+        },
+        "blame" => GitOptions {
+            flags: "CMeflnstw",
+            valued: "L",
+            long: &["--line-porcelain", "--porcelain", "--root", "--show-name", "--show-number"],
+            long_valued: &["--date"],
+        },
+        // log, show and diff.
+        _ => GitOptions { flags: "CMWbipsuw", valued: "GLSUn", long: LOG_LONG, long_valued: LOG_LONG_VALUED },
+    }
+}
+
+/// Checks git arguments against the subcommand's options: the first one
+/// refused, if any. A path may not leave the repository, since `git diff`
+/// with a path outside the work tree reads it as `--no-index` would.
+fn git_refusal(argv: &[String]) -> Option<String> {
+    let opts = git_options(&argv[0]);
+    let mut args = argv[1..].iter();
+    let leaves = |a: &str| {
+        let mut depth = 0i32;
+        a.starts_with('/') || a.starts_with('~') || a.split('/').any(|c| {
+            depth += match c { ".." => -1, "" | "." => 0, _ => 1 };
+            depth < 0
+        })
+    };
+    while let Some(a) = args.next() {
+        if a == "--" {
+            return args.find(|a| leaves(a)).map(|a| format!("{a} is outside the repository"));
+        }
+        if let Some(long) = a.strip_prefix("--") {
+            let ok = match long.split_once('=') {
+                Some((name, _)) => opts.long_valued.contains(&format!("--{name}").as_str()),
+                None => opts.long.contains(&a.as_str()),
+            };
+            if !ok {
+                return Some(format!("{a} is not allowed"));
+            }
+        } else if let Some(short) = a.strip_prefix('-').filter(|s| !s.is_empty()) {
+            // -<n>: a commit count for log, context lines for grep.
+            if short.bytes().all(|b| b.is_ascii_digit()) {
+                continue;
+            }
+            for (i, c) in short.char_indices() {
+                if opts.valued.contains(c) {
+                    // The rest is its value, else the next argument is.
+                    if i + c.len_utf8() == short.len() {
+                        args.next();
+                    }
+                    break;
+                }
+                if !opts.flags.contains(c) {
+                    return Some(format!("{a} is not allowed"));
+                }
+            }
+        } else if leaves(a) {
+            return Some(format!("{a} is outside the repository"));
+        }
+    }
+    None
+}
+
 const SYSTEM: &str = "You are a code search agent. The user asked a question about their code. Find the places in the code that answer it.
 
 The code is a set of git repositories under one root: {repos}. Paths are relative to that root, e.g. `{example}`.
@@ -385,15 +483,15 @@ fn call(corpus: &Corpus, search: &mut Search, notes: &mut Vec<String>, name: &st
             if argv.first().is_none_or(|c| !GIT_COMMANDS.contains(&c.as_str())) {
                 return format!("error: allowed commands are {}", GIT_COMMANDS.join(", "));
             }
-            // What would write a file or run a program: diff and log write
-            // with --output, grep opens a pager with -O.
-            if let Some(bad) = argv.iter().find(|a| {
-                a.starts_with("--output") || a.starts_with("--open-files-in-pager") || a.starts_with("-O") || a.starts_with("--ext-diff")
-            }) {
-                return format!("error: {bad} is not allowed");
+            if let Some(refusal) = git_refusal(&argv) {
+                return format!("error: {refusal}");
             }
             let mut cmd = Command::new("git");
-            cmd.current_dir(&repo).env("GIT_PAGER", "cat").env_remove("GIT_EXTERNAL_DIFF").arg("--no-pager").args(&argv);
+            cmd.current_dir(&repo)
+                .env("GIT_PAGER", "cat")
+                .env_remove("GIT_EXTERNAL_DIFF")
+                .args(["--no-pager", "-c", "core.pager=cat"])
+                .args(&argv);
             let out = run_tool(cmd);
             clip(if out.is_empty() { "no output".to_string() } else { out })
         }
@@ -730,8 +828,34 @@ mod tests {
         let mut notes = Vec::new();
         let mut git = |args: &str| call(&corpus, &mut search, &mut notes, "git", &json!({"repo": "proj", "args": args}));
         assert_eq!(git("diff --output=/tmp/x"), "error: --output=/tmp/x is not allowed");
-        assert_eq!(git("grep -Ovim foo"), "error: -Ovim is not allowed");
         assert_eq!(git("diff --ext-diff"), "error: --ext-diff is not allowed");
+        assert_eq!(git("log --textconv -p"), "error: --textconv is not allowed");
+        // The pager command, spelled as git would accept it: grouped behind
+        // other short options, attached, and as an abbreviation.
+        assert_eq!(git("grep -Ovim foo"), "error: -Ovim is not allowed");
+        assert_eq!(git("grep -iO'touch marker' retry"), "error: -iOtouch marker is not allowed");
+        assert_eq!(git("grep -inO 'touch marker' retry"), "error: -inO is not allowed");
+        assert_eq!(git("grep --open='touch marker' retry"), "error: --open=touch marker is not allowed");
+        assert_eq!(git("grep --open-files-in-pager retry"), "error: --open-files-in-pager is not allowed");
+        // Git expands any unique prefix, so only exact names pass, even of allowed options.
+        assert_eq!(git("grep --cont=3 retry"), "error: --cont=3 is not allowed");
+        assert_eq!(git("grep --line retry"), "error: --line is not allowed");
+        assert_eq!(git("grep -f ../secret.txt"), "error: -f is not allowed");
+        assert_eq!(git("blame --contents=../secret.txt src/upload.rs"), "error: --contents=../secret.txt is not allowed");
+        // Files outside the repository, explicitly or as diff's implied --no-index.
+        assert_eq!(git("diff --no-index ../secret.txt src/upload.rs"), "error: --no-index is not allowed");
+        assert_eq!(git("diff ../secret.txt src/upload.rs"), "error: ../secret.txt is outside the repository");
+        assert_eq!(git("diff -- src/../../secret.txt"), "error: src/../../secret.txt is outside the repository");
+        let abs = root.join("secret.txt").display().to_string();
+        assert_eq!(git(&format!("diff {abs} src/upload.rs")), format!("error: {abs} is outside the repository"));
+        // What a search needs still runs: grouped flags, values, counts, ranges.
+        let ok = |out: String| assert!(!out.starts_with("error: ") || out.contains("not a git repository"), "{out}");
+        ok(git("grep -in -e retry"));
+        ok(git("grep -A3 -n retry -- src"));
+        ok(git("log -3 --oneline --author=me -- src/upload.rs"));
+        ok(git("log -n 5 -Sretry -p"));
+        ok(git("blame -L1,3 -w src/upload.rs"));
+        ok(git("diff HEAD~1..HEAD --stat"));
         assert_eq!(git("push origin main"), "error: allowed commands are blame, diff, grep, log, show");
         assert_eq!(call(&corpus, &mut search, &mut notes, "git", &json!({"repo": "nope", "args": "log"})), "error: no such repository");
     }
