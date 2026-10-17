@@ -21,6 +21,8 @@ The instant list is what a user expects from a search box: the same text gives t
 - **It prints progress and hits.** Text by default; `--json` gives JSON lines: a `step` event per tool call, a `hit` per kept place (path, lines, url, why), then `done`. The UI row can show progress during the seconds a deep search takes.
 - **Code only in the first version.** The user first chose all sources, then code only once the live instance turned out to hold only code: on 2026-10-16 `type:web` and `type:file` each returned 0 of its 83,092 documents, so web and file tools would ship untested. Files and web get their own design later.
 - **12 model turns and 60 s.** At 60 s the model is told to answer with what it has checked; the last turn has no tools either way.
+
+How the 60 s holds is the agent's call (2026-10-17). A model call is cut off at what is left of the 60 s, and a tool call left in a turn once the time is up is answered "out of time" without running. Each tool, search included, gives up at 30 s. The answer turn then runs without thinking, for at most 30 s; the alternative was to let it think within the budget of 256. So a deep search ends by about 120 s at worst: 60 s, one tool's 30 s, and the answer's 30 s. Before, the limit was checked only between turns, and the live run below took 133.6 s: on the CPU each turn took about a minute, so turn 2 began under 60 s and ran past it, and the forced turn 3 thought too.
 - **The agent's model and the reranker share the card**, so the agent's searches keep their rerank, as in the 2026-10-07 eval, without one model evicting the other. Chosen over a per-query switch that skips the rerank (the earlier recommendation) and over semsearch running its own llama-server beside InferMux, which the warden would not see. How InferMux keeps both loaded is open.
 
 The model for the first version is Qwen3.5-4B Q4_K_M with a thinking budget of 256, the eval's best local result. That is the agent's pick, not a decision.
@@ -78,6 +80,19 @@ Below 4B nothing reached instant top-3; the sub-1B models found nothing. Qwen3.5
 The ceiling ran as fresh Claude Code sessions with only the four tools (bench/README.md, "Agent"); its transcripts are evaluation only, never training data (Training data, above). It found every query in every run, so the harness and tools suffice, and the 4B models' misses are the model's. Its precision understates it: the answer lists hold one or two places, and it also shows tests and exception classes that arguably count.
 
 Speed on the 3080 (`bench/results/2026-10-06-222644-llm-speed.json`): no dense model above 4B generates 100 tok/s at 16k context; Qwen3.5-4B does about 140.
+
+## Why-lines, graded 2026-10-17
+
+Opus 5.5 (effort medium, `claude -p`, no tools) graded every why-line of two 2026-10-07 runs with `bench/why.py`, one call per query: is the line true of the code it points at (shown with 3 lines around it), and does it say why the place answers the question. Evaluation only, never training data. Results in `bench/results/2026-10-17-034403-why.json`.
+
+| Run | Lines | True | Partly true | False | Says why | True and says why |
+|---|---|---|---|---|---|---|
+| Qwen3.5-4B Q4_K_M, budget 256 | 196 | 0.81 | 0.18 | 0.01 | 0.60 | 0.48 |
+| of those, at a correct place | 82 | 0.88 | 0.12 | 0 | 0.80 | 0.70 |
+| Opus 5.5, ceiling | 319 | 0.92 | 0.08 | 0 | 0.80 | 0.75 |
+| of those, at a correct place | 155 | 0.93 | 0.07 | 0 | 0.88 | 0.82 |
+
+Qwen almost never writes a false line; it writes a line that only restates the code ("Exception class representing a full shift") at four in ten. At the places that are correct, its lines are nearly as good as Opus's. Two caveats. Opus graded its own lines, so the ceiling may read high. And "partly" includes claims about code just outside the shown lines, such as the name of the enclosing function, so "true" is a lower bound for both.
 
 ## How `semsearch ask` differs from the eval
 
