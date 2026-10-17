@@ -13,6 +13,8 @@ pub struct Hister {
     pub ops: Vec<String>,
     /// URLs whose add answers 500 and stores nothing.
     pub fail: HashSet<String>,
+    /// URLs whose get answers 503, as an overloaded or restarting hister does.
+    pub unavailable: HashSet<String>,
 }
 
 /// A fake hister on a free port. `/api/batch` adds, gets and deletes
@@ -64,6 +66,7 @@ pub fn hister() -> (String, Arc<Mutex<Hister>>) {
                                 h.docs.insert(url, doc);
                                 json!({ "status": 200 })
                             }
+                            "get" if h.unavailable.contains(&url) => json!({ "status": 503, "error": "unavailable on purpose" }),
                             "get" => match h.docs.get(&url) {
                                 Some(doc) => json!({ "status": 200, "document": doc }),
                                 None => json!({ "status": 404 }),

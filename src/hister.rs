@@ -102,15 +102,21 @@ pub fn delete(server: &str, urls: &[String]) -> Result<()> {
 }
 
 /// The stored document for each of `urls`, if the instance holds it.
+///
+/// Only a 404 means the instance lacks the URL. Any other failure is an
+/// error, since a caller that took it for a missing document would write or
+/// re-import what hister already holds.
 pub fn get(server: &str, urls: &[String]) -> Result<Vec<Option<Value>>> {
     let mut out = Vec::with_capacity(urls.len());
     for part in urls.chunks(MAX_BATCH) {
         let ops = part.iter().map(|u| json!({ "op": "get", "url": u })).collect();
-        out.extend(
-            batch(server, ops)?
-                .into_iter()
-                .map(|mut r| (r["status"].as_u64() == Some(200)).then(|| r["document"].take())),
-        );
+        for (url, mut r) in part.iter().zip(batch(server, ops)?) {
+            match r["status"].as_u64().unwrap_or(0) {
+                200..300 => out.push(Some(r["document"].take())),
+                404 => out.push(None),
+                status => bail!("get {url} -> {status} {}", r["error"]),
+            }
+        }
     }
     Ok(out)
 }

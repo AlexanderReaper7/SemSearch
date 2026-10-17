@@ -178,3 +178,29 @@ fn an_entry_that_failed_to_add_is_sent_again() {
     drop(conn);
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+// Only a 404 says hister lacks a document. A run that took a 503 for one would
+// import all history again and write over what hister holds.
+#[test]
+fn a_failed_lookup_stops_the_run_and_keeps_the_state() {
+    let tmp = scratch("history-failed-get");
+    let (path, conn) = places(&tmp);
+    visit(&conn, "https://a.example/", "A", T0);
+    visit(&conn, "https://b.example/", "B", T0 + DAY_US);
+    let (server, hister) = common::hister();
+    let data = tmp.join("data");
+    import(&server, &data, &path);
+    let state = data.join("semsearch/history-state.json");
+    let before = std::fs::read(&state).unwrap();
+
+    visit(&conn, "https://c.example/", "C", T0 + 2 * DAY_US);
+    hister.lock().unwrap().unavailable.insert("https://b.example/".into());
+    hister.lock().unwrap().ops.clear();
+    let out = run_import(&server, &data, &path);
+    assert!(!out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("503"), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(ops(&hister, "add"), Vec::<String>::new());
+    assert_eq!(std::fs::read(&state).unwrap(), before);
+    drop(conn);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
