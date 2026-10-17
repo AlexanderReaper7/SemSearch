@@ -201,10 +201,15 @@ pub fn search(source: Option<Source>, s: &Search) -> Result<Found> {
 /// Verification, 2026-10-17).
 pub fn search_within(source: Option<Source>, s: &Search, timeout: Option<std::time::Duration>) -> Result<Found> {
     let server = server();
+    let started = std::time::Instant::now();
     let mut found = search_at(&server, source, s, timeout)?;
+    // The count shares the caller's time limit; with none of it left, the
+    // search returns without the note.
+    let left = timeout.map(|t| t.saturating_sub(started.elapsed()));
     if found.hits.is_empty()
         && let Some(src) = source
-        && let Ok(0) = count(&server, src)
+        && left.is_none_or(|t| !t.is_zero())
+        && let Ok(0) = count(&server, src, left)
     {
         let fix = match src {
             Source::Web => "add Firefox history with `semsearch import-history`",
@@ -217,11 +222,14 @@ pub fn search_within(source: Option<Source>, s: &Search, timeout: Option<std::ti
 }
 
 /// How many documents the instance holds from `source`, from a keyword search
-/// on its filter alone.
-pub fn count(server: &str, source: Source) -> Result<u64> {
+/// on its filter alone, given up after `timeout` if one is given.
+pub fn count(server: &str, source: Source, timeout: Option<std::time::Duration>) -> Result<u64> {
     let q = json!({ "text": source.filter(), "limit": 1 });
-    let mut resp = agent()
-        .get(format!("{server}/search"))
+    let mut req = agent().get(format!("{server}/search"));
+    if let Some(t) = timeout {
+        req = req.config().timeout_global(Some(t)).build();
+    }
+    let mut resp = req
         .query("query", q.to_string())
         .header("Origin", ORIGIN)
         .call()

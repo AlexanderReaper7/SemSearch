@@ -28,3 +28,37 @@ fn a_search_of_a_source_with_documents_does_not() {
     let stderr = search(&server, "code");
     assert!(stderr.contains("hister holds no code documents"), "{stderr}");
 }
+
+// Deep search gives each tool call a time limit (src/ask.rs, TOOL_TIMEOUT),
+// and the count after an empty search is part of the call.
+#[test]
+fn the_count_after_an_empty_search_keeps_the_time_limit() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::time::{Duration, Instant};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let server = format!("http://{}", listener.local_addr().unwrap());
+    // The search answers at once with nothing; the count takes 5 s.
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut request = String::new();
+            BufReader::new(stream.try_clone().unwrap()).read_line(&mut request).unwrap();
+            std::thread::spawn(move || {
+                if request.contains("limit") {
+                    std::thread::sleep(Duration::from_secs(5));
+                }
+                let out = r#"{"documents":[],"semantic_hits":[],"total":0}"#;
+                let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{out}", out.len());
+            });
+        }
+    });
+    // SAFETY: no other test in this binary reads SEMSEARCH_URL from the
+    // process environment; they pass it to a child process.
+    unsafe { std::env::set_var("SEMSEARCH_URL", &server) };
+    let started = Instant::now();
+    let search = semsearch::hister::Search { query: "anything", since: None, before: None };
+    let found = semsearch::hister::search_within(Some(semsearch::Source::Code), &search, Some(Duration::from_secs(1)));
+    let took = started.elapsed();
+    assert!(took < Duration::from_secs(3), "took {took:?} with a 1 s limit");
+    assert!(found.unwrap().hits.is_empty());
+}
