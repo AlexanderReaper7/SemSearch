@@ -30,6 +30,10 @@ pub struct Limits {
 /// The user's choice, 2026-10-16.
 pub const LIMITS: Limits = Limits { turns: 12, time: Duration::from_secs(60) };
 
+/// How long the answer turn after a limit may take. It runs without
+/// thinking, so on the GPU it takes a few seconds.
+const ANSWER_TIME: Duration = Duration::from_secs(30);
+
 const OUTPUT_CHARS: usize = 6000; // per tool result
 const READ_LINES: usize = 150;
 const INSTANT: usize = 10; // instant results shown up front
@@ -108,10 +112,18 @@ pub enum Event {
     Error { message: String },
 }
 
+/// One model call: tools to offer, whether it thinks first, and how long it may take.
+pub struct Call<'a> {
+    pub tools: Option<&'a Value>,
+    pub think: bool,
+    pub timeout: Duration,
+}
+
 /// A chat model with tool calls.
 pub trait Model {
-    /// The assistant message of one completion, as the OpenAI API gives it.
-    fn chat(&mut self, messages: &[Value], tools: Option<&Value>) -> Result<Value>;
+    /// The assistant message of one completion, as the OpenAI API gives it,
+    /// or None when it took longer than `call.timeout`.
+    fn chat(&mut self, messages: &[Value], call: Call) -> Result<Option<Value>>;
 }
 
 /// An OpenAI-compatible endpoint, InferMux by default.
@@ -131,8 +143,6 @@ impl Llm {
             model: std::env::var("SEMSEARCH_LLM_MODEL").unwrap_or_else(|_| "Qwen3.5-4B-Q4_K_M".to_string()),
             key: std::env::var("SEMSEARCH_LLM_KEY").ok().filter(|k| !k.is_empty()),
             agent: ureq::Agent::config_builder()
-                // A cold start loads the model, and a turn thinks about 2k tokens.
-                .timeout_global(Some(Duration::from_secs(300)))
                 .http_status_as_error(false)
                 .build()
                 .into(),
@@ -141,32 +151,40 @@ impl Llm {
 }
 
 impl Model for Llm {
-    fn chat(&mut self, messages: &[Value], tools: Option<&Value>) -> Result<Value> {
-        // The eval's sampling. The thinking budget is the server's
-        // (`--reasoning-budget`), so it lives where the model is served.
+    fn chat(&mut self, messages: &[Value], call: Call) -> Result<Option<Value>> {
+        // The sampling of the eval's best run, 2026-10-07-035717. The
+        // thinking budget is the server's (`--reasoning-budget`), so it
+        // lives where the model is served.
         let mut body = json!({
             "model": self.model,
             "messages": messages,
             "temperature": 0.6,
             "top_p": 0.95,
-            "max_tokens": 5120,
-            "chat_template_kwargs": {"enable_thinking": true},
+            "max_tokens": 1280,
+            "chat_template_kwargs": {"enable_thinking": call.think},
         });
-        if let Some(tools) = tools {
+        if let Some(tools) = call.tools {
             body["tools"] = tools.clone();
         }
         let url = format!("{}/chat/completions", self.url);
-        let mut req = self.agent.post(&url);
+        let mut req = self.agent.post(&url).config().timeout_global(Some(call.timeout)).build();
         if let Some(key) = &self.key {
             req = req.header("Authorization", format!("Bearer {key}"));
         }
-        let mut resp = req.send_json(body).with_context(|| format!("POST {url}"))?;
+        // llama-server stops generating when the client hangs up.
+        let mut resp = match req.send_json(body) {
+            Err(ureq::Error::Timeout(_)) => return Ok(None),
+            r => r.with_context(|| format!("POST {url}"))?,
+        };
         let status = resp.status();
-        let mut reply: Value = resp.body_mut().read_json().context("chat response")?;
+        let mut reply: Value = match resp.body_mut().read_json() {
+            Err(ureq::Error::Timeout(_)) => return Ok(None),
+            r => r.context("chat response")?,
+        };
         if !status.is_success() {
             bail!("{url} returned {status}: {reply}");
         }
-        Ok(reply["choices"][0]["message"].take())
+        Ok(Some(reply["choices"][0]["message"].take()))
     }
 }
 
@@ -447,15 +465,30 @@ pub fn run(query: &str, corpus: &Corpus, limits: Limits, model: &mut dyn Model, 
     ];
     let tools = tools();
     let (mut answer, mut stopped, mut turns) = (String::new(), None, 0);
+    let mut timed_out = false;
     for turn in 1..=limits.turns {
-        let out_of_time = started.elapsed() >= limits.time;
-        let last = turn == limits.turns || out_of_time;
+        let left = if timed_out { Duration::ZERO } else { limits.time.saturating_sub(started.elapsed()) };
+        let last = turn == limits.turns || left.is_zero();
         if last {
-            stopped = Some(if out_of_time { "time" } else { "turns" });
+            stopped = Some(if left.is_zero() { "time" } else { "turns" });
             messages.push(json!({"role": "user", "content": "No more tool calls. Answer now in the format asked for."}));
         }
-        let msg = model.chat(&messages, (!last).then_some(&tools))?;
+        // The time limit holds inside a turn too: a call still thinking when
+        // it runs out is dropped, and the answer turn comes next. That turn
+        // thinks not at all, so it is short.
+        let request = match last {
+            true => Call { tools: None, think: false, timeout: ANSWER_TIME },
+            false => Call { tools: Some(&tools), think: true, timeout: left },
+        };
+        let reply = model.chat(&messages, request)?;
         turns = turn;
+        let Some(msg) = reply else {
+            if last {
+                break;
+            }
+            timed_out = true;
+            continue;
+        };
         let calls = msg["tool_calls"].as_array().cloned().unwrap_or_default();
         let content = msg["content"].as_str().unwrap_or_default().to_string();
         // A server refuses an assistant message with neither.
@@ -512,15 +545,23 @@ mod tests {
     use super::*;
 
     /// A model that answers from a script and keeps what it was sent.
+    /// A reply of `null` stands for a call that ran out of time.
     struct Scripted {
         replies: Vec<Value>,
         sent: Vec<(Vec<Value>, bool)>,
+        calls: Vec<(bool, Duration)>,
+    }
+
+    fn scripted(replies: Vec<Value>) -> Scripted {
+        Scripted { replies, sent: Vec::new(), calls: Vec::new() }
     }
 
     impl Model for Scripted {
-        fn chat(&mut self, messages: &[Value], tools: Option<&Value>) -> Result<Value> {
-            self.sent.push((messages.to_vec(), tools.is_some()));
-            Ok(self.replies.remove(0))
+        fn chat(&mut self, messages: &[Value], call: Call) -> Result<Option<Value>> {
+            self.sent.push((messages.to_vec(), call.tools.is_some()));
+            self.calls.push((call.think, call.timeout));
+            let reply = self.replies.remove(0);
+            Ok((!reply.is_null()).then_some(reply))
         }
     }
 
@@ -556,13 +597,10 @@ mod tests {
     #[test]
     fn a_checked_place_is_a_hit_with_its_why() {
         let (corpus, root) = corpus("hit");
-        let mut model = Scripted {
-            replies: vec![
+        let mut model = scripted(vec![
                 tool_call("read", json!({"path": "proj/src/upload.rs", "start": 1, "end": 3})),
                 answer("proj/src/upload.rs:1-3 | retries the upload three times"),
-            ],
-            sent: Vec::new(),
-        };
+        ]);
         let mut events = Vec::new();
         run("where are uploads retried", &corpus, LIMITS, &mut model, &mut instant(&root), &mut |e| events.push(e)).unwrap();
 
@@ -587,7 +625,7 @@ mod tests {
     #[test]
     fn out_of_time_the_model_answers_without_tools() {
         let (corpus, root) = corpus("time");
-        let mut model = Scripted { replies: vec![answer("NONE")], sent: Vec::new() };
+        let mut model = scripted(vec![answer("NONE")]);
         let mut events = Vec::new();
         let limits = Limits { turns: 12, time: Duration::ZERO };
         run("anything", &corpus, limits, &mut model, &mut instant(&root), &mut |e| events.push(e)).unwrap();
@@ -599,12 +637,27 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_that_runs_out_of_time_is_dropped_and_the_answer_turn_follows() {
+        let (corpus, root) = corpus("in-turn");
+        // The first call outlives the limit; the answer turn then answers.
+        let mut model = scripted(vec![Value::Null, answer("proj/src/upload.rs:1-3 | retries the upload")]);
+        let mut events = Vec::new();
+        let limits = Limits { turns: 12, time: Duration::from_secs(5) };
+        run("anything", &corpus, limits, &mut model, &mut instant(&root), &mut |e| events.push(e)).unwrap();
+
+        let (think, timeout) = model.calls[0];
+        assert!(think);
+        assert!(timeout <= Duration::from_secs(5) && timeout > Duration::from_secs(4), "{timeout:?}");
+        assert_eq!(model.calls[1], (false, ANSWER_TIME));
+        assert!(!model.sent[1].1);
+        assert_eq!(model.sent[1].0.last().unwrap()["content"], "No more tool calls. Answer now in the format asked for.");
+        assert!(matches!(events.last().unwrap(), Event::Done { hits: 1, turns: 2, stopped: Some("time"), .. }));
+    }
+
+    #[test]
     fn at_the_last_turn_the_model_answers_without_tools() {
         let (corpus, root) = corpus("turns");
-        let mut model = Scripted {
-            replies: vec![tool_call("grep", json!({"pattern": "retry"})), answer("proj/src/upload.rs:2 | calls retry")],
-            sent: Vec::new(),
-        };
+        let mut model = scripted(vec![tool_call("grep", json!({"pattern": "retry"})), answer("proj/src/upload.rs:2 | calls retry")]);
         let mut events = Vec::new();
         let limits = Limits { turns: 2, time: Duration::from_secs(60) };
         run("anything", &corpus, limits, &mut model, &mut instant(&root), &mut |e| events.push(e)).unwrap();
@@ -620,16 +673,13 @@ mod tests {
     fn nothing_outside_the_indexed_repositories_is_read_or_shown() {
         let (corpus, root) = corpus("outside");
         let outside = root.join("secret.txt").display().to_string();
-        let mut model = Scripted {
-            replies: vec![
+        let mut model = scripted(vec![
                 tool_call("read", json!({"path": "secret.txt"})),
                 tool_call("read", json!({"path": outside})),
                 tool_call("read", json!({"path": "proj/../secret.txt"})),
                 tool_call("grep", json!({"pattern": "code", "path": "secret.txt"})),
                 answer("secret.txt:1 | holds a secret\nproj/missing.rs:1 | made up"),
-            ],
-            sent: Vec::new(),
-        };
+        ]);
         let mut events = Vec::new();
         run("anything", &corpus, LIMITS, &mut model, &mut instant(&root), &mut |e| events.push(e)).unwrap();
 
