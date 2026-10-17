@@ -535,11 +535,14 @@ fn call(corpus: &Corpus, search: &mut Search, notes: &mut Vec<String>, name: &st
                 return format!("error: {refusal}");
             }
             let mut cmd = Command::new("git");
-            cmd.current_dir(&repo)
-                .env("GIT_PAGER", "cat")
-                .env_remove("GIT_EXTERNAL_DIFF")
-                .args(["--no-pager", "-c", "core.pager=cat"])
-                .args(&argv);
+            // An inherited GIT_DIR would point git at another repository,
+            // and GIT_CONFIG_* or GIT_EXTERNAL_DIFF could run a program.
+            for (name, _) in std::env::vars_os() {
+                if name.as_encoded_bytes().starts_with(b"GIT_") {
+                    cmd.env_remove(name);
+                }
+            }
+            cmd.current_dir(&repo).env("GIT_PAGER", "cat").args(["--no-pager", "-c", "core.pager=cat"]).args(&argv);
             let out = run_tool(cmd, TOOL_TIMEOUT);
             clip(if out.is_empty() { "no output".to_string() } else { out })
         }
@@ -745,7 +748,11 @@ mod tests {
         let repo = root.join("proj");
         std::fs::remove_dir_all(repo.join(".git")).unwrap();
         let git = |args: &[&str]| {
-            let out = Command::new("git").current_dir(&repo).args(["-c", "user.name=test", "-c", "user.email=test@example.com"]).args(args).output().unwrap();
+            let mut cmd = Command::new("git");
+            for (name, _) in std::env::vars_os().filter(|(n, _)| n.as_encoded_bytes().starts_with(b"GIT_")) {
+                cmd.env_remove(name);
+            }
+            let out = cmd.current_dir(&repo).args(["-c", "user.name=test", "-c", "user.email=test@example.com"]).args(args).output().unwrap();
             assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
         };
         let upload = std::fs::read_to_string(repo.join("src/upload.rs")).unwrap();
@@ -949,6 +956,40 @@ mod tests {
         has(git("blame -L1,3 -w src/upload.rs"), "retry(3);");
         has(git("diff HEAD~1..HEAD --stat"), "src/upload.rs | 1 +");
         assert_eq!(call(&corpus, &mut search, &mut notes, "git", &json!({"repo": "nope", "args": "log"})), "error: no such repository");
+    }
+
+    #[test]
+    fn inherited_git_variables_do_not_reach_git() {
+        // Variables set in this process would reach the tests running beside
+        // it, so the check runs in a copy of the test binary started with them.
+        const MARKER: &str = "SEMSEARCH_TEST_GIT_MARKER";
+        let Some(marker) = std::env::var_os(MARKER).map(PathBuf::from) else {
+            let (_, elsewhere) = repo_corpus("git-env-elsewhere");
+            let marker = elsewhere.join("marker");
+            let out = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "ask::tests::inherited_git_variables_do_not_reach_git", "--test-threads", "1"])
+                .env(MARKER, &marker)
+                .env("GIT_DIR", elsewhere.join("proj/.git"))
+                .env("GIT_WORK_TREE", elsewhere.join("proj"))
+                .env("GIT_CONFIG_COUNT", "1")
+                .env("GIT_CONFIG_KEY_0", "diff.external")
+                .env("GIT_CONFIG_VALUE_0", format!("touch {}", marker.display()))
+                .env("GIT_EXTERNAL_DIFF", format!("touch {}", marker.display()))
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(out.status.success() && stdout.contains("1 passed"), "{stdout}{}", String::from_utf8_lossy(&out.stderr));
+            return;
+        };
+        let (corpus, root) = repo_corpus("git-env");
+        // A change only this repository has.
+        std::fs::write(root.join("proj/src/upload.rs"), "fn upload() {\n    retry(4);\n}\n").unwrap();
+        let mut search = instant(&root);
+        let mut notes = Vec::new();
+        let mut git = |args: &str| call(&corpus, &mut search, &mut notes, "git", &json!({"repo": "proj", "args": args}));
+        let diff = git("diff");
+        assert!(!marker.exists(), "an inherited variable ran a program");
+        assert!(diff.contains("+    retry(4);"), "{diff}");
     }
 
     #[test]
