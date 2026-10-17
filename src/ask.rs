@@ -205,7 +205,7 @@ pub fn hister_search(dirs: &[PathBuf]) -> impl FnMut(&str, usize) -> Result<(Vec
             Some(f) => format!("{f} {q}"),
             None => q.to_string(),
         };
-        let found = hister::search(Some(Source::Code), &hister::Search { query: &query, since: None, before: None })?;
+        let found = hister::search_within(Some(Source::Code), &hister::Search { query: &query, since: None, before: None }, Some(TOOL_TIMEOUT))?;
         let pieces = found.hits.into_iter().take(limit).map(|h| Piece { url: h.url, chunk: h.chunk }).collect();
         Ok((pieces, found.notes))
     }
@@ -507,7 +507,10 @@ pub fn run(query: &str, corpus: &Corpus, limits: Limits, model: &mut dyn Model, 
             let name = c["function"]["name"].as_str().unwrap_or_default().to_string();
             let raw = c["function"]["arguments"].as_str().unwrap_or("{}");
             let mut notes = Vec::new();
+            // Calls left when the time runs out are not run, so at most one
+            // tool's time (TOOL_TIMEOUT) goes past the limit.
             let out = match serde_json::from_str::<Value>(if raw.trim().is_empty() { "{}" } else { raw }) {
+                _ if started.elapsed() >= limits.time => "error: out of time, not run".to_string(),
                 Ok(args) => {
                     on(Event::Step { turn, tool: name.clone(), args: args.clone() });
                     call(corpus, search, &mut notes, &name, &args)
@@ -652,6 +655,35 @@ mod tests {
         assert!(!model.sent[1].1);
         assert_eq!(model.sent[1].0.last().unwrap()["content"], "No more tool calls. Answer now in the format asked for.");
         assert!(matches!(events.last().unwrap(), Event::Done { hits: 1, turns: 2, stopped: Some("time"), .. }));
+    }
+
+    #[test]
+    fn tool_calls_left_when_the_time_runs_out_are_not_run() {
+        let (corpus, root) = corpus("tools-time");
+        let two = json!({"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": "search", "arguments": "{\"query\": \"a\"}"}},
+            {"id": "c2", "type": "function", "function": {"name": "search", "arguments": "{\"query\": \"b\"}"}}]});
+        let mut model = scripted(vec![two, answer("NONE")]);
+        let mut events = Vec::new();
+        let limits = Limits { turns: 12, time: Duration::from_millis(200) };
+        let mut searches = 0;
+        let mut first = instant(&root);
+        // The instant search is quick; each search the model asks for takes
+        // longer than the whole limit.
+        let mut search = |q: &str, n: usize| {
+            searches += 1;
+            if searches > 1 {
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            first(q, n)
+        };
+        run("anything", &corpus, limits, &mut model, &mut search, &mut |e| events.push(e)).unwrap();
+
+        assert_eq!(searches, 2);
+        let results: Vec<&Value> = model.sent[1].0.iter().filter(|m| m["role"] == "tool").collect();
+        assert_eq!(results[1]["content"], "error: out of time, not run");
+        assert!(!model.sent[1].1);
+        assert!(matches!(events.last().unwrap(), Event::Done { turns: 2, stopped: Some("time"), .. }));
     }
 
     #[test]

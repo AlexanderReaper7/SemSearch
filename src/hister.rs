@@ -190,6 +190,11 @@ pub struct Search<'a> {
 /// failed too, the keyword hits are returned without a similarity, so a
 /// degraded search still shows something.
 pub fn search(source: Option<Source>, s: &Search) -> Result<Found> {
+    search_within(source, s, None)
+}
+
+/// `search`, given up after `timeout` if one is given.
+pub fn search_within(source: Option<Source>, s: &Search, timeout: Option<std::time::Duration>) -> Result<Found> {
     let server = server();
     let text = match source {
         Some(src) => format!("{} {}", src.filter(), s.query),
@@ -204,8 +209,11 @@ pub fn search(source: Option<Source>, s: &Search) -> Result<Found> {
         q["date_to"] = json!(t - 1);
     }
     let started = std::time::Instant::now();
-    let mut resp = agent()
-        .get(format!("{server}/search"))
+    let mut req = agent().get(format!("{server}/search"));
+    if let Some(t) = timeout {
+        req = req.config().timeout_global(Some(t)).build();
+    }
+    let mut resp = req
         .query("query", q.to_string())
         .header("Origin", ORIGIN)
         .call()
