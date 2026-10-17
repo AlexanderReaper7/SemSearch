@@ -190,12 +190,11 @@ pub struct Search<'a> {
 /// failed too, the keyword hits are returned without a similarity, so a
 /// degraded search still shows something.
 pub fn search(source: Option<Source>, s: &Search) -> Result<Found> {
-    search_within(source, s, None)
+    search_within(&server(), source, s, None)
 }
 
-/// `search`, given up after `timeout` if one is given.
-pub fn search_within(source: Option<Source>, s: &Search, timeout: Option<std::time::Duration>) -> Result<Found> {
-    let server = server();
+/// `search` on hister at `server`, given up after `timeout` if one is given.
+pub fn search_within(server: &str, source: Option<Source>, s: &Search, timeout: Option<std::time::Duration>) -> Result<Found> {
     let text = match source {
         Some(src) => format!("{} {}", src.filter(), s.query),
         None => s.query.to_string(),

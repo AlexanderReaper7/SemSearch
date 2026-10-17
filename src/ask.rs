@@ -297,13 +297,18 @@ pub type Search<'a> = dyn FnMut(&str, usize) -> Result<(Vec<Piece>, Vec<String>)
 
 /// Instant search over the code in hister, under `dirs` if any are given.
 pub fn hister_search(dirs: &[PathBuf]) -> impl FnMut(&str, usize) -> Result<(Vec<Piece>, Vec<String>)> + use<> {
+    hister_search_at(hister::server(), dirs, TOOL_TIMEOUT)
+}
+
+/// `hister_search` on hister at `server`, each search given up after `timeout`.
+fn hister_search_at(server: String, dirs: &[PathBuf], timeout: Duration) -> impl FnMut(&str, usize) -> Result<(Vec<Piece>, Vec<String>)> + use<> {
     let filter = (!dirs.is_empty()).then(|| code::under(dirs));
     move |q, limit| {
         let query = match &filter {
             Some(f) => format!("{f} {q}"),
             None => q.to_string(),
         };
-        let found = hister::search_within(Some(Source::Code), &hister::Search { query: &query, since: None, before: None }, Some(TOOL_TIMEOUT))?;
+        let found = hister::search_within(&server, Some(Source::Code), &hister::Search { query: &query, since: None, before: None }, Some(timeout))?;
         let pieces = found.hits.into_iter().take(limit).map(|h| Piece { url: h.url, chunk: h.chunk }).collect();
         Ok((pieces, found.notes))
     }
@@ -394,7 +399,8 @@ fn clip(text: String) -> String {
 }
 
 /// Runs a read-only command for a tool: its output, else its errors, else "".
-fn run_tool(mut cmd: Command) -> String {
+/// Killed after `timeout`.
+fn run_tool(mut cmd: Command, timeout: Duration) -> String {
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = match cmd.spawn() {
         Ok(child) => child,
@@ -412,10 +418,10 @@ fn run_tool(mut cmd: Command) -> String {
     };
     let out = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let err = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    if !matches!(child.wait_timeout(TOOL_TIMEOUT), Ok(Some(_))) {
+    if !matches!(child.wait_timeout(timeout), Ok(Some(_))) {
         let _ = child.kill();
         let _ = child.wait();
-        return format!("error: no answer in {} s", TOOL_TIMEOUT.as_secs());
+        return format!("error: no answer in {} s", timeout.as_secs_f64());
     }
     let (out, err) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
     String::from_utf8_lossy(if out.is_empty() { &err } else { &out }).into_owned()
@@ -455,7 +461,7 @@ fn call(corpus: &Corpus, search: &mut Search, notes: &mut Vec<String>, name: &st
             for t in &targets {
                 cmd.arg(t.strip_prefix(&corpus.root).unwrap_or(t));
             }
-            let out = run_tool(cmd);
+            let out = run_tool(cmd, TOOL_TIMEOUT);
             clip(if out.is_empty() { "no matches".to_string() } else { out })
         }
         "read" => {
@@ -492,7 +498,7 @@ fn call(corpus: &Corpus, search: &mut Search, notes: &mut Vec<String>, name: &st
                 .env_remove("GIT_EXTERNAL_DIFF")
                 .args(["--no-pager", "-c", "core.pager=cat"])
                 .args(&argv);
-            let out = run_tool(cmd);
+            let out = run_tool(cmd, TOOL_TIMEOUT);
             clip(if out.is_empty() { "no output".to_string() } else { out })
         }
         _ => format!("error: no tool named {name}"),
@@ -870,5 +876,70 @@ mod tests {
         assert!(read("NONE").is_empty());
         assert!(read("a/b.rs:10-20").is_empty());
         assert!(read("Here is what I found:").is_empty());
+    }
+
+    #[test]
+    fn a_turn_gets_only_the_time_left() {
+        let (corpus, root) = corpus("time-left");
+        let mut model = scripted(vec![answer("NONE")]);
+        let mut found = instant(&root);
+        // The instant search takes 300 ms of the second.
+        let mut slow = |q: &str, n: usize| {
+            std::thread::sleep(Duration::from_millis(300));
+            found(q, n)
+        };
+        let limits = Limits { turns: 12, time: Duration::from_secs(1) };
+        run("anything", &corpus, limits, &mut model, &mut slow, &mut |_| ()).unwrap();
+
+        let (think, timeout) = model.calls[0];
+        assert!(think);
+        assert!(timeout <= Duration::from_millis(700), "{timeout:?}");
+    }
+
+    #[test]
+    fn an_answer_turn_that_runs_out_of_time_ends_the_run() {
+        let (corpus, root) = corpus("answer-time");
+        // Both the tool turn and the answer turn outlive their time.
+        let mut model = scripted(vec![Value::Null, Value::Null, answer("proj/src/upload.rs:1-3 | late")]);
+        let mut events = Vec::new();
+        let limits = Limits { turns: 12, time: Duration::from_secs(5) };
+        run("anything", &corpus, limits, &mut model, &mut instant(&root), &mut |e| events.push(e)).unwrap();
+
+        assert_eq!(model.calls.len(), 2);
+        assert!(matches!(events[..], [Event::Done { hits: 0, turns: 2, stopped: Some("time"), .. }]));
+    }
+
+    #[test]
+    fn a_search_hister_does_not_answer_is_given_up() {
+        // Accepts and never answers.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let server = format!("http://{}", listener.local_addr().unwrap());
+        let hold = std::thread::spawn(move || {
+            let conn = listener.accept();
+            std::thread::sleep(Duration::from_secs(5));
+            drop(conn);
+        });
+        let mut search = hister_search_at(server, &[], Duration::from_millis(300));
+        let started = Instant::now();
+        assert!(search("anything", 5).is_err());
+        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+        drop(hold);
+    }
+
+    #[test]
+    fn a_tool_that_does_not_finish_is_killed() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("10");
+        let started = Instant::now();
+        assert_eq!(run_tool(cmd, Duration::from_millis(300)), "error: no answer in 0.3 s");
+        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn tools_searches_and_the_answer_get_the_documented_time() {
+        // docs/deep-search.md: a tool or search past 30 s is given up, and
+        // the answer turn gets 30 s, so a run ends by 120 s at worst.
+        assert_eq!(TOOL_TIMEOUT, Duration::from_secs(30));
+        assert_eq!(ANSWER_TIME, Duration::from_secs(30));
     }
 }
