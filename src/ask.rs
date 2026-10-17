@@ -12,9 +12,10 @@ use regex::Regex;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::io::Read;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, mpsc};
 use std::time::{Duration, Instant};
 use wait_timeout::ChildExt;
 
@@ -418,31 +419,53 @@ fn clip(text: String) -> String {
 }
 
 /// Runs a read-only command for a tool: its output, else its errors, else "".
-/// Killed after `timeout`.
+/// Given up after `timeout`: the command and whatever it started are killed,
+/// as its own process group, and output still unread then is not waited for.
 fn run_tool(mut cmd: Command, timeout: Duration) -> String {
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let deadline = Instant::now() + timeout;
+    let given_up = || format!("error: no answer in {} s", timeout.as_secs_f64());
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => return format!("error: {e}"),
     };
+    let group = child.id() as libc::pid_t;
     // Read both pipes while it runs, so a full pipe cannot stall it.
-    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+    let (tx, rx) = mpsc::channel();
+    let pipes: [Option<Box<dyn Read + Send>>; 2] =
+        [child.stdout.take().map(|p| Box::new(p) as _), child.stderr.take().map(|p| Box::new(p) as _)];
+    for (i, pipe) in pipes.into_iter().enumerate() {
+        let tx = tx.clone();
         std::thread::spawn(move || {
             let mut buf = Vec::new();
             if let Some(mut pipe) = pipe {
                 let _ = pipe.read_to_end(&mut buf);
             }
-            buf
-        })
-    };
-    let out = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let err = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    if !matches!(child.wait_timeout(timeout), Ok(Some(_))) {
-        let _ = child.kill();
-        let _ = child.wait();
-        return format!("error: no answer in {} s", timeout.as_secs_f64());
+            let _ = tx.send((i, buf));
+        });
     }
-    let (out, err) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
+    drop(tx);
+    // The group is killed before the child is reaped, so its id cannot have
+    // passed to another process yet.
+    let kill_group = || unsafe { libc::kill(-group, libc::SIGKILL) };
+    if !matches!(child.wait_timeout(timeout), Ok(Some(_))) {
+        kill_group();
+        let _ = child.wait();
+        return given_up();
+    }
+    let mut out = [Vec::new(), Vec::new()];
+    for _ in 0..2 {
+        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok((i, buf)) => out[i] = buf,
+            // Something it started still holds a pipe: alive, so its group
+            // still has this id.
+            Err(_) => {
+                kill_group();
+                return given_up();
+            }
+        }
+    }
+    let [out, err] = out;
     String::from_utf8_lossy(if out.is_empty() { &err } else { &out }).into_owned()
 }
 
@@ -988,13 +1011,67 @@ mod tests {
         drop(hold);
     }
 
+    /// Whether `pid` has ended: gone, or a zombie its new parent has yet to reap.
+    fn ended(pid: &str) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .map_or(true, |stat| stat.rsplit_once(") ").is_some_and(|(_, rest)| rest.starts_with('Z')))
+    }
+
     #[test]
-    fn a_tool_that_does_not_finish_is_killed() {
-        let mut cmd = Command::new("sleep");
-        cmd.arg("10");
+    fn a_tool_that_does_not_finish_is_killed_with_what_it_started() {
+        let (_, root) = corpus("kill");
+        let pids = root.join("pids");
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(format!("echo $$ > {0}; sleep 30 & echo $! >> {0}; wait", pids.display()));
         let started = Instant::now();
         assert_eq!(run_tool(cmd, Duration::from_millis(300)), "error: no answer in 0.3 s");
-        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        let pids = std::fs::read_to_string(&pids).unwrap();
+        let [shell, sleep] = pids.split_whitespace().collect::<Vec<_>>()[..] else { panic!("{pids:?}") };
+        // The shell is reaped; the sleep it started is ended too.
+        assert!(!Path::new(&format!("/proc/{shell}")).exists(), "the shell {shell} is left");
+        let until = Instant::now() + Duration::from_secs(2);
+        while !ended(sleep) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(ended(sleep), "the sleep {sleep} it started still runs");
+    }
+
+    #[test]
+    fn what_a_finished_tool_left_holding_its_output_is_killed() {
+        let (_, root) = corpus("left");
+        let pid = root.join("pid");
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(format!("sleep 30 & echo $! > {}; echo answered", pid.display()));
+        let started = Instant::now();
+        assert_eq!(run_tool(cmd, Duration::from_millis(300)), "error: no answer in 0.3 s");
+        assert!(started.elapsed() < Duration::from_secs(1), "{:?}", started.elapsed());
+        let pid = std::fs::read_to_string(&pid).unwrap();
+        let until = Instant::now() + Duration::from_secs(2);
+        while !ended(pid.trim()) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(ended(pid.trim()), "the sleep {pid} still runs");
+    }
+
+    #[test]
+    fn output_held_past_the_deadline_is_not_waited_for() {
+        // The shell answers and exits, but a sleep in its own session keeps
+        // the pipe open, out of reach of the group kill.
+        let (_, root) = corpus("held");
+        let pid = root.join("pid");
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg(format!("setsid sleep 30 & echo $! > {}; echo answered", pid.display()));
+        let started = Instant::now();
+        let out = run_tool(cmd, Duration::from_millis(300));
+        let elapsed = started.elapsed();
+        let pid = std::fs::read_to_string(&pid).unwrap();
+        let pid = pid.trim();
+        if std::fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|c| c.starts_with(b"sleep\0")) {
+            unsafe { libc::kill(pid.parse().unwrap(), libc::SIGKILL) };
+        }
+        assert_eq!(out, "error: no answer in 0.3 s");
+        assert!(elapsed < Duration::from_secs(1), "{elapsed:?}");
     }
 
     #[test]
