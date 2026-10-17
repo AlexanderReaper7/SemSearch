@@ -224,7 +224,7 @@ The user renamed the project from Semantic-Search to SemSearch, the binary's nam
 
 ## 2026-10-08 - The icon is a grey lens over the embedding grid
 
-The icon is candidate 9c in `icon/candidates.html`, a magnifying glass whose lens distorts a grid of embedding cells, distortion 0.2 (rim ×0.40). `icon/favicon.svg` is the exported favicon. The extension icon, the favicon and any tile are colorless for now. Color appears only while a search runs: an aurora behind the search pill and the grid roaming under the lens, mocked in `icon/working.html`. The user liked the semi-translucent rainbow on black in Google's Gemini app.
+The icon is candidate 9c in `icon/candidates.html`, a magnifying glass whose lens distorts a grid of embedding cells, distortion 0.2 (rim ×0.40). `icon/favicon.svg` is the exported favicon. The extension icon, the favicon and any tile are colorless for now. The icon is one color, `currentColor`, so it works on light and dark backgrounds the way a text glyph does: ring and handle in full, each cell at its own opacity, and a 2-unit gap between grid and ring instead of a black lens. The favicon sets that color itself through `prefers-color-scheme`, since nothing passes a text color to a favicon. Color appears only while a search runs: an aurora behind the search pill and the grid roaming under the lens, mocked in `icon/working.html`. The user liked the semi-translucent rainbow on black in Google's Gemini app.
 
 ## 2026-10-14 - VS Code runs semsearch from PATH, and a folder inside a repository stands for it
 
