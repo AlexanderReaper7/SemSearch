@@ -89,6 +89,9 @@ fn copy_places(places: &Path, dir: &Path) -> Result<PathBuf> {
     bail!("{} kept starting its WAL over while it was copied", places.display())
 }
 
+/// URL, title, first and last visit in microseconds, and the visit count.
+type Row = (String, String, i64, i64, i64);
+
 /// Every history entry, newest first, and the newest visit in microseconds.
 fn read_places(places: &Path) -> Result<(Vec<(String, Entry)>, Option<i64>)> {
     let tmp = std::env::temp_dir().join(format!("semsearch-places-{}", std::process::id()));
@@ -96,7 +99,7 @@ fn read_places(places: &Path) -> Result<(Vec<(String, Entry)>, Option<i64>)> {
     let db = copy_places(places, &tmp)?;
 
     // visit_date is microseconds.
-    let (rows, newest): (Vec<(String, String, i64, i64, i64)>, Option<i64>) = {
+    let (rows, newest): (Vec<Row>, Option<i64>) = {
         let conn = rusqlite::Connection::open(&db)?;
         let mut stmt = conn.prepare(
             "SELECT p.url, COALESCE(p.title, ''), MIN(v.visit_date), MAX(v.visit_date), COUNT(*)
@@ -133,7 +136,7 @@ fn read_places(places: &Path) -> Result<(Vec<(String, Entry)>, Option<i64>)> {
         e.visits += visits as u64;
     }
     let mut entries: Vec<_> = merged.into_iter().collect();
-    entries.sort_by(|a, b| b.1.last_us.cmp(&a.1.last_us));
+    entries.sort_by_key(|(_, e)| std::cmp::Reverse(e.last_us));
     Ok((entries, newest))
 }
 
