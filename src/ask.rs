@@ -48,8 +48,11 @@ const GIT_COMMANDS: [&str; 5] = ["blame", "diff", "grep", "log", "show"];
 struct GitOptions {
     /// Short options without a value, which may be grouped: `-in`.
     flags: &'static str,
-    /// Short options with a value, attached or next: `-n5`, `-n 5`.
+    /// Short options that need a value, attached or next: `-n5`, `-n 5`.
     valued: &'static str,
+    /// Short options whose value is optional and only attached: `-U3`, `-U`.
+    /// The rest of the group is the value, and the next argument is not.
+    optional: &'static str,
     /// Long options without a value.
     long: &'static [&'static str],
     /// Long options with a value, only as `--name=value`.
@@ -72,6 +75,7 @@ fn git_options(command: &str) -> GitOptions {
         "grep" => GitOptions {
             flags: "EFGHIPchilnqvw",
             valued: "ABCem",
+            optional: "",
             long: &[
                 "--all-match", "--and", "--break", "--cached", "--count", "--extended-regexp", "--files-with-matches",
                 "--fixed-strings", "--heading", "--ignore-case", "--invert-match", "--line-number", "--not", "--or",
@@ -80,21 +84,29 @@ fn git_options(command: &str) -> GitOptions {
             long_valued: &["--after-context", "--before-context", "--context", "--max-count"],
         },
         "blame" => GitOptions {
-            flags: "CMeflnstw",
+            flags: "eflnstw",
             valued: "L",
+            optional: "CM",
             long: &["--line-porcelain", "--porcelain", "--root", "--show-name", "--show-number"],
             long_valued: &["--date"],
         },
-        // log, show and diff.
-        _ => GitOptions { flags: "CMWbipsuw", valued: "GLSUn", long: LOG_LONG, long_valued: LOG_LONG_VALUED },
+        "log" => GitOptions { flags: "Wbipsuw", valued: "GLSn", optional: "CMU", long: LOG_LONG, long_valued: LOG_LONG_VALUED },
+        "show" => GitOptions { flags: "Wbipsuw", valued: "GSn", optional: "CMU", long: LOG_LONG, long_valued: LOG_LONG_VALUED },
+        _ => GitOptions { flags: "Wbpsuw", valued: "GS", optional: "CMU", long: LOG_LONG, long_valued: LOG_LONG_VALUED },
     }
 }
 
 /// Checks git arguments against the subcommand's options: the first one
 /// refused, if any. A path may not leave the repository, since `git diff`
-/// with a path outside the work tree reads it as `--no-index` would.
+/// with a path outside the work tree reads it as `--no-index` would. grep's
+/// first argument that is not an option is its pattern, unless an `-e`
+/// anywhere before `--` gave one.
 fn git_refusal(argv: &[String]) -> Option<String> {
     let opts = git_options(&argv[0]);
+    let mut positional = Vec::new();
+    // grep's pattern can only come before `--`.
+    let mut before_dashes = None;
+    let mut pattern_given = false;
     let mut args = argv[1..].iter();
     let leaves = |a: &str| {
         let mut depth = 0i32;
@@ -105,7 +117,9 @@ fn git_refusal(argv: &[String]) -> Option<String> {
     };
     while let Some(a) = args.next() {
         if a == "--" {
-            return args.find(|a| leaves(a)).map(|a| format!("{a} is outside the repository"));
+            before_dashes = Some(positional.len());
+            positional.extend(args.by_ref());
+            break;
         }
         if let Some(long) = a.strip_prefix("--") {
             let ok = match long.split_once('=') {
@@ -121,22 +135,27 @@ fn git_refusal(argv: &[String]) -> Option<String> {
                 continue;
             }
             for (i, c) in short.char_indices() {
+                if opts.optional.contains(c) {
+                    break;
+                }
                 if opts.valued.contains(c) {
                     // The rest is its value, else the next argument is.
                     if i + c.len_utf8() == short.len() {
                         args.next();
                     }
+                    pattern_given |= c == 'e';
                     break;
                 }
                 if !opts.flags.contains(c) {
                     return Some(format!("{a} is not allowed"));
                 }
             }
-        } else if leaves(a) {
-            return Some(format!("{a} is outside the repository"));
+        } else {
+            positional.push(a);
         }
     }
-    None
+    let skip = usize::from(argv[0] == "grep" && !pattern_given && before_dashes.unwrap_or(positional.len()) > 0);
+    positional.into_iter().skip(skip).find(|a| leaves(a)).map(|a| format!("{a} is outside the repository"))
 }
 
 const SYSTEM: &str = "You are a code search agent. The user asked a question about their code. Find the places in the code that answer it.
@@ -696,6 +715,27 @@ mod tests {
         (Corpus::new(root.clone(), vec![repo], Vec::new()), root)
     }
 
+    /// `corpus`, with `proj` a real git repository: two commits by `test`,
+    /// the second one "retry the upload", and `src/routes.rs`.
+    fn repo_corpus(name: &str) -> (Corpus, PathBuf) {
+        let (corpus, root) = corpus(name);
+        let repo = root.join("proj");
+        std::fs::remove_dir_all(repo.join(".git")).unwrap();
+        let git = |args: &[&str]| {
+            let out = Command::new("git").current_dir(&repo).args(["-c", "user.name=test", "-c", "user.email=test@example.com"]).args(args).output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        let upload = std::fs::read_to_string(repo.join("src/upload.rs")).unwrap();
+        std::fs::write(repo.join("src/upload.rs"), "fn upload() {\n}\n").unwrap();
+        std::fs::write(repo.join("src/routes.rs"), "const UPLOAD: &str = \"/api/upload\";\n").unwrap();
+        git(&["init", "-q"]);
+        git(&["add", "."]);
+        git(&["commit", "-qm", "add upload"]);
+        std::fs::write(repo.join("src/upload.rs"), upload).unwrap();
+        git(&["commit", "-qam", "retry the upload"]);
+        (corpus, root)
+    }
+
     fn instant(root: &Path) -> impl FnMut(&str, usize) -> Result<(Vec<Piece>, Vec<String>)> + use<> {
         let url = format!("vscode://file{}/proj/src/upload.rs:1:1", root.display());
         move |_, _| Ok((vec![Piece { url: url.clone(), chunk: "fn upload() {".to_string() }], Vec::new()))
@@ -829,13 +869,22 @@ mod tests {
 
     #[test]
     fn git_refuses_what_writes_or_runs() {
-        let (corpus, root) = corpus("git");
+        let (corpus, root) = repo_corpus("git");
+        let repo = root.join("proj");
         let mut search = instant(&root);
         let mut notes = Vec::new();
         let mut git = |args: &str| call(&corpus, &mut search, &mut notes, "git", &json!({"repo": "proj", "args": args}));
-        assert_eq!(git("diff --output=/tmp/x"), "error: --output=/tmp/x is not allowed");
+        let written = root.join("written");
+        let w = written.display().to_string();
+        assert_eq!(git(&format!("diff --output={w}")), format!("error: --output={w} is not allowed"));
         assert_eq!(git("diff --ext-diff"), "error: --ext-diff is not allowed");
         assert_eq!(git("log --textconv -p"), "error: --textconv is not allowed");
+        // A value git reads only attached does not take the next argument.
+        assert_eq!(git(&format!("log -U --output={w}")), format!("error: --output={w} is not allowed"));
+        assert_eq!(git(&format!("log -pU --output={w}")), format!("error: --output={w} is not allowed"));
+        // An option of another subcommand takes no value either.
+        assert_eq!(git(&format!("diff -L {w} src/upload.rs")), "error: -L is not allowed");
+        assert_eq!(git(&format!("show -L {w} src/upload.rs")), "error: -L is not allowed");
         // The pager command, spelled as git would accept it: grouped behind
         // other short options, attached, and as an abbreviation.
         assert_eq!(git("grep -Ovim foo"), "error: -Ovim is not allowed");
@@ -854,15 +903,28 @@ mod tests {
         assert_eq!(git("diff -- src/../../secret.txt"), "error: src/../../secret.txt is outside the repository");
         let abs = root.join("secret.txt").display().to_string();
         assert_eq!(git(&format!("diff {abs} src/upload.rs")), format!("error: {abs} is outside the repository"));
-        // What a search needs still runs: grouped flags, values, counts, ranges.
-        let ok = |out: String| assert!(!out.starts_with("error: ") || out.contains("not a git repository"), "{out}");
-        ok(git("grep -in -e retry"));
-        ok(git("grep -A3 -n retry -- src"));
-        ok(git("log -3 --oneline --author=me -- src/upload.rs"));
-        ok(git("log -n 5 -Sretry -p"));
-        ok(git("blame -L1,3 -w src/upload.rs"));
-        ok(git("diff HEAD~1..HEAD --stat"));
+        assert_eq!(git(&format!("diff -U {abs} src/upload.rs")), format!("error: {abs} is outside the repository"));
+        assert_eq!(git(&format!("grep -e retry {abs}")), format!("error: {abs} is outside the repository"));
+        assert_eq!(git(&format!("grep retry {abs}")), format!("error: {abs} is outside the repository"));
+        assert_eq!(git(&format!("grep {abs} -e retry")), format!("error: {abs} is outside the repository"));
+        assert_eq!(git(&format!("grep -- {abs}")), format!("error: {abs} is outside the repository"));
+        assert!(!written.exists() && !repo.join("marker").exists());
         assert_eq!(git("push origin main"), "error: allowed commands are blame, diff, grep, log, show");
+
+        // What a search needs still runs: grouped flags, values, counts,
+        // ranges, and a grep pattern that looks like a path.
+        let has = |out: String, text: &str| assert!(out.contains(text), "{text:?} not in {out:?}");
+        has(git("grep -in -e retry"), "src/upload.rs:2:    retry(3);");
+        has(git("grep -A3 -n retry -- src"), "src/upload.rs:2:    retry(3);");
+        has(git("grep /api/ src"), "src/routes.rs:const UPLOAD");
+        has(git("grep -e /api/ -- src"), "src/routes.rs:const UPLOAD");
+        has(git("log -1 --oneline --author=test -- src/upload.rs"), "retry the upload");
+        has(git("log -n 5 -Sretry -p"), "+    retry(3);");
+        has(git("log -U1 -p -1"), "+    retry(3);");
+        has(git("log -U -1 --stat"), "src/upload.rs");
+        has(git("show -U0 HEAD"), "+    retry(3);");
+        has(git("blame -L1,3 -w src/upload.rs"), "retry(3);");
+        has(git("diff HEAD~1..HEAD --stat"), "src/upload.rs | 1 +");
         assert_eq!(call(&corpus, &mut search, &mut notes, "git", &json!({"repo": "nope", "args": "log"})), "error: no such repository");
     }
 
