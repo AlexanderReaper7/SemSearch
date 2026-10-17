@@ -6,6 +6,7 @@ See bench/README.md.
 
     uv run bench/agent.py /srv/models/agent-candidates/Qwen3.5-4B-Q4_K_M.gguf --runs 5 --note "..."
     uv run bench/agent.py --endpoint http://host/v1 --model-name name ...   # a server already running
+    uv run bench/agent.py --ask target/release/semsearch MODEL.gguf ...     # the loop of `semsearch ask`
 
 The agent gets the query and the instant results, then has read-only tools
 (search, grep, read, git) and answers with the hits it keeps, one per line as
@@ -476,6 +477,42 @@ def agent_claude(model: str, effort: str, query: str) -> dict:
     return {"answer": answer or None, "stats": stats, "messages": messages}
 
 
+# `semsearch ask`
+
+
+def agent_ask(binary: Path, endpoint: str, model: str, query: str) -> dict:
+    """The loop of `semsearch ask --json` (src/ask.rs) instead of `agent`. Its
+    home directory is the corpus, so its paths are the eval's. Its own limits
+    hold (12 turns, 60 s) and its own sampling; the answer is its hits as
+    `path:start-end | why` lines, scored as `agent`'s are."""
+    corpus = CORPUS.resolve()
+    stats = new_stats()
+    start = time.perf_counter()
+    p = subprocess.run([str(binary), "ask", "--json", query], capture_output=True, text=True, timeout=600,
+                       env=env() | {"HOME": str(corpus), "SEMSEARCH_LLM_URL": endpoint, "SEMSEARCH_LLM_MODEL": model})
+    events = [json.loads(l) for l in p.stdout.splitlines() if l.startswith("{")]
+    lines = []
+    for e in events:
+        match e["event"]:
+            case "step":
+                stats["tool_calls"] += 1
+            case "hit":
+                path = Path(e["path"])
+                shown = path.relative_to(corpus) if path.is_relative_to(corpus) else path
+                lines.append(f"{shown}:{e['start']}-{e['end']} | {e['why']}")
+            case "note" if "search failed" in e["message"] or "reranking failed" in e["message"]:
+                stats["degraded_searches"] += 1
+            case "done":
+                stats["turns"], stats["stopped"] = e["turns"], e["stopped"]
+            case "error":
+                stats["error"] = e["message"][:300]
+    if p.returncode and "error" not in stats:
+        stats["error"] = f"exit {p.returncode}: {p.stderr.strip()[-300:]}"
+    stats["seconds"] = round(time.perf_counter() - start, 2)
+    stats.setdefault("turns", 0)
+    return {"answer": "\n".join(lines) if lines else None, "stats": stats, "messages": events}
+
+
 def summarize(rows: list[dict]) -> dict:
     """Found and precision over the queries with answers; for those without,
     how often the agent showed nothing. Found is broken down by run.GROUPS."""
@@ -515,6 +552,7 @@ def summarize(rows: list[dict]) -> dict:
         "tool_calls_mean": round(statistics.mean(s["tool_calls"] for s in st), 2),
         "seconds": run.summarize([s["seconds"] for s in st]),
         "completion_tokens_mean": round(statistics.mean(s["completion_tokens"] for s in st)),
+        "stopped": {why: sum(1 for s in st if s.get("stopped") == why) for why in ("turns", "time")},
     }
 
 
@@ -535,6 +573,7 @@ def main() -> None:
     ap.add_argument("--max-tokens", type=int, default=1024, help="per model call, thinking included")
     ap.add_argument("--server-args", default="", help="extra llama-server flags, e.g. MTP")
     ap.add_argument("--note", default="")
+    ap.add_argument("--ask", metavar="SEMSEARCH", type=Path, help="run `SEMSEARCH ask --json` as the loop, with its own limits and sampling")
     ap.add_argument("--rescore", nargs="+", type=Path, help="score saved agent results again, in place")
     args = ap.parse_args()
     if args.rescore:
@@ -554,6 +593,10 @@ def main() -> None:
     result = {"kind": "agent", "when": datetime.now().isoformat(timespec="seconds"), "note": args.note,
               "setup": run.setup(), "max_turns": MAX_TURNS, "max_span": MAX_SPAN, "runs": args.runs,
               "split": args.split, "queries": [q["id"] for q in qs], "server_args": args.server_args, "ctx": args.ctx, "models": []}
+    if args.ask:
+        # src/ask.rs sets its own; the forced answer turn runs without thinking.
+        sampling = {"temperature": 0.6, "top_p": 0.95, "max_tokens": 1280, "think": "on, off for the answer turn"}
+        result["loop"] = {"ask": str(args.ask.resolve()), "commit": run.git("-C", str(run.REPO), "rev-parse", "HEAD")}
     if args.claude:
         # The Consumer Terms forbid training models on Claude's output; these
         # transcripts measure the ceiling and must stay out of training data.
@@ -563,15 +606,20 @@ def main() -> None:
             claude_sampling = {"effort": args.effort, "loop": "claude -p"}
             result["models"].append(evaluate(lambda q: agent_claude(args.claude, args.effort, q),
                                              f"claude:{args.claude}", qs, args.runs, claude_sampling, args.parallel))
+        def one(endpoint: str, name: str):
+            if args.ask:
+                return lambda q: agent_ask(args.ask, endpoint, name, q)
+            return lambda q: agent(endpoint, name, q, sampling)
+
         if args.endpoint:
-            result["models"].append(evaluate(lambda q: agent(args.endpoint, args.model_name, q, sampling),
+            result["models"].append(evaluate(one(args.endpoint, args.model_name),
                                              args.model_name, qs, args.runs, sampling, args.parallel))
         for model in args.models:
             print(model.name, file=sys.stderr)
             proc = serve(model, args.ctx, shlex.split(args.server_args))
             endpoint = f"http://127.0.0.1:{PORT}/v1"
             try:
-                result["models"].append(evaluate(lambda q: agent(endpoint, model.name, q, sampling),
+                result["models"].append(evaluate(one(endpoint, model.name),
                                                  model.name, qs, args.runs, sampling))
             finally:
                 stop(proc)
