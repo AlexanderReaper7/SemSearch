@@ -36,14 +36,12 @@ fn visit(conn: &Connection, url: &str, title: &str, at: i64) {
     conn.execute("INSERT INTO moz_historyvisits (place_id, visit_date) SELECT id, ?2 FROM moz_places WHERE url = ?1", (url, at)).unwrap();
 }
 
+fn run_import(server: &str, data: &Path, places: &Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_semsearch")).arg("import-history").arg(places).env("SEMSEARCH_URL", server).env("XDG_DATA_HOME", data).output().unwrap()
+}
+
 fn import(server: &str, data: &Path, places: &Path) {
-    let out = Command::new(env!("CARGO_BIN_EXE_semsearch"))
-        .arg("import-history")
-        .arg(places)
-        .env("SEMSEARCH_URL", server)
-        .env("XDG_DATA_HOME", data)
-        .output()
-        .unwrap();
+    let out = run_import(server, data, places);
     assert!(out.status.success(), "import-history: {}", String::from_utf8_lossy(&out.stderr));
 }
 
@@ -114,6 +112,49 @@ fn visits_still_in_the_wal_are_imported() {
     let (server, hister) = common::hister();
     import(&server, &tmp.join("data"), &path);
     assert_eq!(ops(&hister, "add"), ["https://a.example/"]);
+    drop(conn);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+// Firefox Sync and history imports insert visits dated before visits that
+// are already there.
+#[test]
+fn a_visit_dated_before_the_last_import_is_still_imported() {
+    let tmp = scratch("history-backdated");
+    let (path, conn) = places(&tmp);
+    visit(&conn, "https://a.example/", "A", T0 + 5 * DAY_US);
+    let (server, hister) = common::hister();
+    let data = tmp.join("data");
+    import(&server, &data, &path);
+    hister.lock().unwrap().ops.clear();
+
+    visit(&conn, "https://b.example/", "B", T0 + DAY_US);
+    import(&server, &data, &path);
+    assert_eq!(ops(&hister, "add"), ["https://b.example/"]);
+    drop(conn);
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+// moz_historyvisits has no AUTOINCREMENT, so after its newest visit is
+// deleted, as clearing recent history does, the next visit gets the same id.
+#[test]
+fn a_visit_that_reuses_a_deleted_id_is_imported() {
+    let tmp = scratch("history-reused-id");
+    let (path, conn) = places(&tmp);
+    visit(&conn, "https://a.example/", "A", T0);
+    visit(&conn, "https://b.example/", "B", T0 + DAY_US);
+    let (server, hister) = common::hister();
+    let data = tmp.join("data");
+    import(&server, &data, &path);
+    let top: i64 = conn.query_row("SELECT MAX(id) FROM moz_historyvisits", [], |r| r.get(0)).unwrap();
+    conn.execute("DELETE FROM moz_historyvisits WHERE id = ?1", [top]).unwrap();
+    hister.lock().unwrap().ops.clear();
+
+    visit(&conn, "https://c.example/", "C", T0 + 2 * DAY_US);
+    let reused: i64 = conn.query_row("SELECT MAX(id) FROM moz_historyvisits", [], |r| r.get(0)).unwrap();
+    assert_eq!(reused, top);
+    import(&server, &data, &path);
+    assert!(ops(&hister, "add").contains(&"https://c.example/".to_string()), "{:?}", ops(&hister, "add"));
     drop(conn);
     let _ = std::fs::remove_dir_all(&tmp);
 }

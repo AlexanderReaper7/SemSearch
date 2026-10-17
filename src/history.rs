@@ -11,11 +11,14 @@
 //! changed. Its text is empty: hister embeds the title, URL and first visit
 //! as the document's metadata chunk.
 //!
-//! A run is incremental. The state file keeps, per places.sqlite, the newest
-//! visit the last run read and the URL of the newest entry it imported. The
-//! next run sends only entries visited after that visit. When hister no longer
-//! holds that URL, the instance has lost its history, as a new data directory
-//! did on 2026-10-05, and the run imports everything again.
+//! A run is incremental. The state file keeps, per places.sqlite, the highest
+//! visit id the last run read and the URL of the newest entry it imported. The
+//! next run sends only entries with a visit of a higher id. Ids, not visit
+//! times: Firefox Sync and imports insert visits dated in the past, which get
+//! new ids. The run imports everything again when the visit with the kept id
+//! is gone or changed, since SQLite hands a deleted top id out again, and when
+//! hister no longer holds the URL, since then the instance has lost its
+//! history, as a new data directory did on 2026-10-05.
 
 use crate::hister;
 use anyhow::{Context, Result, bail};
@@ -30,9 +33,10 @@ struct Entry {
     title: String,
     first: i64,
     last: i64,
-    /// The last visit in microseconds, as Firefox stores it, to compare with
-    /// the state file's.
+    /// The last visit in microseconds, as Firefox stores it.
     last_us: i64,
+    /// The highest id of its visits, to compare with the state file's.
+    visit_id: i64,
     visits: u64,
 }
 
@@ -43,11 +47,22 @@ struct State {
 
 #[derive(Serialize, Deserialize, Clone)]
 struct Seen {
-    /// Microseconds: the newest visit in places.sqlite when it was read.
-    last_visit: i64,
+    #[serde(flatten)]
+    mark: Mark,
     /// The newest entry imported so far, to check that hister still holds
     /// what was imported.
     url: String,
+}
+
+/// The visit with the highest id in places.sqlite when it was read. A state
+/// file from before ids has neither, and its next run imports everything.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
+struct Mark {
+    #[serde(default)]
+    visit_id: i64,
+    /// Microseconds, to tell the visit from a later one given the same id.
+    #[serde(default)]
+    visit_date: i64,
 }
 
 /// The first bytes of the WAL, or nothing if there is none. Its header holds
@@ -89,35 +104,50 @@ fn copy_places(places: &Path, dir: &Path) -> Result<PathBuf> {
     bail!("{} kept starting its WAL over while it was copied", places.display())
 }
 
-/// URL, title, first and last visit in microseconds, and the visit count.
-type Row = (String, String, i64, i64, i64);
+/// URL, title, first and last visit in microseconds, highest visit id, and
+/// the visit count.
+type Row = (String, String, i64, i64, i64, i64);
 
 struct Places {
     /// Every history entry by URL, newest first.
     entries: Vec<(String, Entry)>,
-    /// The newest visit of any page, in microseconds.
-    newest: Option<i64>,
+    /// The visit with the highest id.
+    mark: Option<Mark>,
+    /// Whether the visit the last run marked is still there as it was.
+    kept: bool,
 }
 
-fn read_places(places: &Path) -> Result<Places> {
+fn read_places(places: &Path, last: Option<Mark>) -> Result<Places> {
     let tmp = std::env::temp_dir().join(format!("semsearch-places-{}", std::process::id()));
     std::fs::create_dir_all(&tmp)?;
     let db = copy_places(places, &tmp)?;
 
     // visit_date is microseconds.
-    let (rows, newest): (Vec<Row>, Option<i64>) = {
+    let (rows, mark, kept): (Vec<Row>, Option<Mark>, bool) = {
+        use rusqlite::OptionalExtension;
         let conn = rusqlite::Connection::open(&db)?;
         let mut stmt = conn.prepare(
-            "SELECT p.url, COALESCE(p.title, ''), MIN(v.visit_date), MAX(v.visit_date), COUNT(*)
+            "SELECT p.url, COALESCE(p.title, ''), MIN(v.visit_date), MAX(v.visit_date), MAX(v.id), COUNT(*)
              FROM moz_places p JOIN moz_historyvisits v ON v.place_id = p.id
              WHERE p.hidden = 0 AND (p.url LIKE 'https://%' OR p.url LIKE 'http://%')
              GROUP BY p.id",
         )?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?
             .collect::<rusqlite::Result<_>>()?;
-        let newest = conn.query_row("SELECT MAX(visit_date) FROM moz_historyvisits", [], |r| r.get(0))?;
-        (rows, newest)
+        let mark = conn
+            .query_row("SELECT id, visit_date FROM moz_historyvisits ORDER BY id DESC LIMIT 1", [], |r| {
+                Ok(Mark { visit_id: r.get(0)?, visit_date: r.get(1)? })
+            })
+            .optional()?;
+        let kept = match last {
+            Some(m) => conn
+                .query_row("SELECT visit_date FROM moz_historyvisits WHERE id = ?1", [m.visit_id], |r| r.get::<_, i64>(0))
+                .optional()?
+                == Some(m.visit_date),
+            None => false,
+        };
+        (rows, mark, kept)
     };
     std::fs::remove_dir_all(&tmp)?;
 
@@ -127,23 +157,24 @@ fn read_places(places: &Path) -> Result<Places> {
     // parameters are skipped, since matching hister's re-encoding of the query
     // exactly is not worth it for tracking-link duplicates.
     let mut merged: HashMap<String, Entry> = HashMap::new();
-    for (url, title, first_us, last_us, visits) in rows {
+    for (url, title, first_us, last_us, visit_id, visits) in rows {
         let url = url.split('#').next().unwrap_or(&url).to_string();
         if url.contains("?utm") || url.contains("&utm") {
             continue;
         }
-        let e = merged.entry(url).or_insert(Entry { title: String::new(), first: i64::MAX, last: 0, last_us: 0, visits: 0 });
+        let e = merged.entry(url).or_insert(Entry { title: String::new(), first: i64::MAX, last: 0, last_us: 0, visit_id: 0, visits: 0 });
         if last_us >= e.last_us || e.title.is_empty() {
             e.title = title;
         }
         e.first = e.first.min(first_us / 1_000_000);
         e.last = e.last.max(last_us / 1_000_000);
         e.last_us = e.last_us.max(last_us);
+        e.visit_id = e.visit_id.max(visit_id);
         e.visits += visits as u64;
     }
     let mut entries: Vec<_> = merged.into_iter().collect();
     entries.sort_by_key(|(_, e)| std::cmp::Reverse(e.last_us));
-    Ok(Places { entries, newest })
+    Ok(Places { entries, mark, kept })
 }
 
 fn owned(doc: &Value) -> bool {
@@ -163,18 +194,22 @@ pub fn import(places: &Path) -> Result<()> {
     };
     let key = std::path::absolute(places)?;
     let seen = state.profiles.get(&key).cloned();
-    let after = match &seen {
-        Some(s) if hister::get(&server, std::slice::from_ref(&s.url))?[0].is_some() => Some(s.last_visit),
+    let held = match &seen {
+        Some(s) if hister::get(&server, std::slice::from_ref(&s.url))?[0].is_some() => true,
         Some(s) => {
             eprintln!("hister lacks {}, which the last import added: importing all history again", s.url);
-            None
+            false
         }
-        None => None,
+        None => false,
     };
 
-    let Places { entries, newest } = read_places(places)?;
+    let Places { entries, mark, kept } = read_places(places, seen.as_ref().map(|s| s.mark))?;
+    if held && !kept {
+        eprintln!("the last import's newest visit is gone from places.sqlite: importing all history again");
+    }
+    let after = (held && kept).then(|| seen.as_ref().map(|s| s.mark.visit_id)).flatten();
     let total = entries.len();
-    let entries: Vec<_> = entries.into_iter().filter(|(_, e)| after.is_none_or(|a| e.last_us > a)).collect();
+    let entries: Vec<_> = entries.into_iter().filter(|(_, e)| after.is_none_or(|a| e.visit_id > a)).collect();
     match after {
         Some(_) => eprintln!("{total} history entries, {} visited since the last import", entries.len()),
         None => eprintln!("{total} history entries"),
@@ -215,13 +250,13 @@ pub fn import(places: &Path) -> Result<()> {
     }
 
     // A failed add is sent again by the next run, which starts from the old
-    // visit.
+    // mark.
     if failed > 0 {
         bail!("{failed} entries failed to add; the next run tries them again");
     }
     let url = entries.first().map(|(u, _)| u.clone()).or(seen.map(|s| s.url));
-    if let (Some(url), Some(last_visit)) = (url, newest) {
-        state.profiles.insert(key, Seen { last_visit, url });
+    if let (Some(url), Some(mark)) = (url, mark) {
+        state.profiles.insert(key, Seen { mark, url });
         let tmp = state_file.with_extension("json.tmp");
         std::fs::write(&tmp, serde_json::to_vec(&state)?)?;
         std::fs::rename(tmp, &state_file)?;
