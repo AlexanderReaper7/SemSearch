@@ -1,6 +1,6 @@
 # SemSearch
 
-Local semantic search over the user's code, files and Firefox history. Nothing leaves the machine: embeddings come from the llama.cpp server that nixcfg runs.
+Local semantic search over the user's code, files and Firefox history. Nothing leaves the user's own machines. hister gets embeddings and reranking from InferMux, which nixcfg runs.
 
 Each source is searched from where it is used. VS Code searches code, Firefox searches web history, and file search has its own entry point. Agents reach all three through a skill. A single query across every source exists but is the rare case.
 
