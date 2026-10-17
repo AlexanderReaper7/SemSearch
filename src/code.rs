@@ -40,10 +40,7 @@ struct FileState {
 }
 
 fn state_path() -> PathBuf {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").expect("HOME is set")).join(".local/share"));
-    base.join("semsearch/code-state.json")
+    crate::data_file("code-state.json")
 }
 
 fn repositories(roots: &[PathBuf]) -> Result<Vec<PathBuf>> {

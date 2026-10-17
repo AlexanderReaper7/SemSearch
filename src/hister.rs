@@ -194,8 +194,43 @@ pub fn search(source: Option<Source>, s: &Search) -> Result<Found> {
 }
 
 /// `search`, given up after `timeout` if one is given.
+///
+/// A source search with no hits says when the source holds no documents at
+/// all, so an empty source is not mistaken for a query that matched nothing.
+/// The web source sat empty for 11 days that way (docs/decisions.md,
+/// Verification, 2026-10-17).
 pub fn search_within(source: Option<Source>, s: &Search, timeout: Option<std::time::Duration>) -> Result<Found> {
     let server = server();
+    let mut found = search_at(&server, source, s, timeout)?;
+    if found.hits.is_empty()
+        && let Some(src) = source
+        && let Ok(0) = count(&server, src)
+    {
+        let fix = match src {
+            Source::Web => "add Firefox history with `semsearch import-history`",
+            Source::Files => "hister indexes no directories, see indexer.directories in its config",
+            Source::Code => "add code with `semsearch index-code`",
+        };
+        found.notes.push(format!("hister holds no {} documents: {fix}", src.name()));
+    }
+    Ok(found)
+}
+
+/// How many documents the instance holds from `source`, from a keyword search
+/// on its filter alone.
+pub fn count(server: &str, source: Source) -> Result<u64> {
+    let q = json!({ "text": source.filter(), "limit": 1 });
+    let mut resp = agent()
+        .get(format!("{server}/search"))
+        .query("query", q.to_string())
+        .header("Origin", ORIGIN)
+        .call()
+        .with_context(|| format!("GET {server}/search"))?;
+    let body: Value = resp.body_mut().read_json().context("search response")?;
+    body["total"].as_u64().context("search response has no total")
+}
+
+fn search_at(server: &str, source: Option<Source>, s: &Search, timeout: Option<std::time::Duration>) -> Result<Found> {
     let text = match source {
         Some(src) => format!("{} {}", src.filter(), s.query),
         None => s.query.to_string(),
