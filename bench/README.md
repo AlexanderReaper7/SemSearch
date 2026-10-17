@@ -102,11 +102,10 @@ The user's minimum is 100 tok/s of generation (2026-10-06); it is read at depth 
 
 ## Agent
 
-`agent.py` runs the deep search agent on the queries: a llama-server per GGUF file (or `--endpoint` for a server already running), the instant results up front, read-only tools (search, grep, read, git), at most 12 model calls. It first unloads InferMux's models, since a server that cannot allocate never shows the GPU load that makes the warden yield; the first search loads the reranker back. Searches without rerank scores are counted as degraded; a run with many is not comparable.
+`agent.py` runs the deep search agent on the queries: each model named is one InferMux serves, reached with the key in `SEMSEARCH_LLM_KEY`; the instant results up front, read-only tools (search, grep, read, git), at most 12 model calls. InferMux is the only program allowed to host a model, evals included (the user's rule, 2026-10-17), so the model's server flags, such as the reasoning budget, are in its InferMux config. Searches without rerank scores are counted as degraded; a run with many is not comparable.
 
 ```sh
-uv run bench/agent.py /srv/models/agent-candidates/Qwen3.5-4B-Q4_K_M.gguf --runs 3 --think \
-  --max-tokens 1280 --server-args "--reasoning on --reasoning-budget 256" --note "..."
+SEMSEARCH_LLM_KEY=... uv run bench/agent.py Qwen3.5-4B-Q4_K_M --runs 3 --think --max-tokens 1280 --note "..."
 uv run bench/agent.py --rescore results/*-agent.json    # score saved answers again
 ```
 
