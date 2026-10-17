@@ -92,13 +92,7 @@ Embedding endpoint throughput, batch 8, concurrency 2, which is what hister send
 
 ## Agent model speed
 
-`llm_speed.py` runs llama-bench (InferMux's llama.cpp build) on GGUF files: prompt processing (pp512) and generation (tg128) at context depths 0, 8192 and 16384, with the peak VRAM nvidia-smi attributes to the process. It runs outside InferMux, whose warden unloads its models while a foreign process uses the card.
-
-```sh
-uv run bench/llm_speed.py /srv/models/agent-candidates/*.gguf --note "..."
-```
-
-The user's minimum is 100 tok/s of generation (2026-10-06); it is read at depth 16384, since the agent's context fills with tool results. The first test of each model (depth 0) runs right after the load and is noisy; the deeper ones are not. The desktop holds about 3.4 GB of the card, which nvidia-smi does not list as compute processes, so about 6.5 GB is left for models.
+The user's minimum is 100 tok/s of generation (2026-10-06), read at 16k context, since the agent's context fills with tool results. `llm_speed.py` measured it with llama-bench outside InferMux; it is gone since InferMux became the only program allowed to host a model (2026-10-17), and its last results are in `bench/results/*-llm-speed.json` and git history. A speed test through InferMux would read llama-server's `timings` from its replies, without the peak VRAM.
 
 ## Agent
 
