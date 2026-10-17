@@ -1,0 +1,43 @@
+# The desktop search window. Its own package rather than a workspace member,
+# so the CLI's build never vendors Tauri (docs/decisions.md, 2026-10-10).
+[package]
+name = "semsearch-gui"
+version = "0.1.0"
+edition = "2024"
+
+[build-dependencies]
+tauri-build = { version = "3.0.0-alpha.3", features = [] }
+
+[dependencies]
+anyhow = "1.0"
+semsearch = { path = ".." }
+serde = { version = "1.0", features = ["derive"] }
+tauri = "3.0.0-alpha.4"
+# Chromium rather than WebKitGTK (docs/decisions.md, 2026-10-10).
+tauri-runtime-cef = { version = "3.0.0-alpha.5", features = ["devtools"] }
+tauri-plugin-opener = "3.0.0-alpha.2"
+tauri-plugin-single-instance = "3.0.0-alpha.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+# On: the binary serves ui/dist itself. `cargo tauri dev` turns it off and
+# loads the Vite server instead, for hot reload.
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+# Tauri v3 with the CEF runtime moved to CEF 154 and taught native Wayland, for
+# the libcef built in ~/Projects/cef-wayland (docs/decisions.md, 2026-10-10).
+# The other crates come from the same checkout so they agree with it.
+[patch.crates-io]
+tauri = { path = "../../cef-wayland/tauri/crates/tauri" }
+tauri-build = { path = "../../cef-wayland/tauri/crates/tauri-build" }
+tauri-codegen = { path = "../../cef-wayland/tauri/crates/tauri-codegen" }
+tauri-macros = { path = "../../cef-wayland/tauri/crates/tauri-macros" }
+tauri-plugin = { path = "../../cef-wayland/tauri/crates/tauri-plugin" }
+tauri-runtime = { path = "../../cef-wayland/tauri/crates/tauri-runtime" }
+tauri-runtime-cef = { path = "../../cef-wayland/tauri/crates/tauri-runtime-cef" }
+tauri-utils = { path = "../../cef-wayland/tauri/crates/tauri-utils" }
