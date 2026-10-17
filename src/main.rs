@@ -26,7 +26,9 @@ enum Command {
     /// Add Firefox history entries to hister, as URL, title and visit times.
     ///
     /// Never fetches a page and never overwrites a document that exists, so
-    /// content captured live by the extension survives a re-run.
+    /// content captured live by the extension survives a re-run. A run sends
+    /// only entries visited since the last one, or everything when hister
+    /// has lost what the last run sent.
     ImportHistory {
         /// places.sqlite of a Firefox profile. Copied before reading, Firefox locks it.
         places: PathBuf,
