@@ -4,6 +4,8 @@
   lib,
   stdenv,
   rustPlatform,
+  git,
+  ripgrep,
   cpuArch ? null,
 }:
 rustPlatform.buildRustPackage {
@@ -18,6 +20,12 @@ rustPlatform.buildRustPackage {
     ];
   };
   cargoLock.lockFile = ../Cargo.lock;
+
+  # ask's tests run its grep and file tools, which call rg and git.
+  nativeCheckInputs = [
+    git
+    ripgrep
+  ];
 
   env = lib.optionalAttrs (cpuArch != null) {
     "CARGO_TARGET_${stdenv.hostPlatform.rust.cargoEnvVarTarget}_RUSTFLAGS" = "-C target-cpu=${cpuArch}";
