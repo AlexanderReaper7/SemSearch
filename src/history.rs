@@ -92,8 +92,14 @@ fn copy_places(places: &Path, dir: &Path) -> Result<PathBuf> {
 /// URL, title, first and last visit in microseconds, and the visit count.
 type Row = (String, String, i64, i64, i64);
 
-/// Every history entry, newest first, and the newest visit in microseconds.
-fn read_places(places: &Path) -> Result<(Vec<(String, Entry)>, Option<i64>)> {
+struct Places {
+    /// Every history entry by URL, newest first.
+    entries: Vec<(String, Entry)>,
+    /// The newest visit of any page, in microseconds.
+    newest: Option<i64>,
+}
+
+fn read_places(places: &Path) -> Result<Places> {
     let tmp = std::env::temp_dir().join(format!("semsearch-places-{}", std::process::id()));
     std::fs::create_dir_all(&tmp)?;
     let db = copy_places(places, &tmp)?;
@@ -137,7 +143,7 @@ fn read_places(places: &Path) -> Result<(Vec<(String, Entry)>, Option<i64>)> {
     }
     let mut entries: Vec<_> = merged.into_iter().collect();
     entries.sort_by_key(|(_, e)| std::cmp::Reverse(e.last_us));
-    Ok((entries, newest))
+    Ok(Places { entries, newest })
 }
 
 fn owned(doc: &Value) -> bool {
@@ -166,7 +172,7 @@ pub fn import(places: &Path) -> Result<()> {
         None => None,
     };
 
-    let (entries, newest) = read_places(places)?;
+    let Places { entries, newest } = read_places(places)?;
     let total = entries.len();
     let entries: Vec<_> = entries.into_iter().filter(|(_, e)| after.is_none_or(|a| e.last_us > a)).collect();
     match after {
