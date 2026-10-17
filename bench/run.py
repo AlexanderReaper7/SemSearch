@@ -164,7 +164,9 @@ def instance(seeding: bool = False):
     with socket.socket() as s:
         if s.connect_ex(("127.0.0.1", PORT)) == 0:
             sys.exit(f"something already listens on :{PORT}")
-    env = os.environ | secrets()
+    # The environment wins over the secrets too, so a run can send the batch
+    # key (InferMux 0004) or turn the rerank off.
+    env = secrets() | os.environ
     # An endpoint set in the environment wins, so another embedder can seed
     # its own instance (SEMSEARCH_BENCH apart) and answer its queries too.
     if seeding:

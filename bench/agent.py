@@ -48,6 +48,9 @@ MAX_SPAN = 80  # lines a correct hit may span
 OUTPUT_CHARS = 6000  # per tool result
 READ_LINES = 150
 INSTANT = 10  # instant results shown up front
+# HISTER__SEMANTIC_SEARCH__RERANK__ENABLE=false runs the instance without
+# rerank, so a missing rerank score is not a degraded search.
+RERANK = os.environ.get("HISTER__SEMANTIC_SEARCH__RERANK__ENABLE", "true") != "false"
 GIT_COMMANDS = {"log", "show", "blame", "diff", "grep"}
 
 SYSTEM = """You are a code search agent. The user asked a question about their code. Find the places in the code that answer it.
@@ -130,7 +133,7 @@ def clip(text: str) -> str:
 def semsearch(query: str, limit: int) -> tuple[list[dict], str | None]:
     p = subprocess.run(["semsearch", "search", "-n", str(limit), "--json", query], env=env(), capture_output=True, text=True)
     hits = [json.loads(l) for l in p.stdout.splitlines() if l.strip()]
-    degraded = None if all(h.get("rerank_score") is not None for h in hits) else "no rerank score"
+    degraded = None if not RERANK or all(h.get("rerank_score") is not None for h in hits) else "no rerank score"
     return hits, degraded if p.returncode == 0 else p.stderr.strip()[-300:]
 
 
@@ -187,7 +190,10 @@ def chat(endpoint: str, model: str, messages: list, tools: list | None, sampling
     body = {"model": model, "messages": messages, **sampling}
     if tools:
         body["tools"] = tools
-    req = urllib.request.Request(f"{endpoint}/chat/completions", json.dumps(body).encode(), {"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if key := os.environ.get("SEMSEARCH_LLM_KEY"):  # the model's InferMux key, as `semsearch ask` reads it
+        headers["Authorization"] = f"Bearer {key}"
+    req = urllib.request.Request(f"{endpoint}/chat/completions", json.dumps(body).encode(), headers)
     with urllib.request.urlopen(req, timeout=600) as resp:
         return json.load(resp)
 
@@ -367,6 +373,8 @@ def stop(proc: subprocess.Popen) -> None:
 def warm_reranker() -> None:
     """A search until it comes back reranked: the warden unloaded the reranker
     when the model's server took the card, and the first rerank loads it."""
+    if not RERANK:
+        return
     for _ in range(30):
         if semsearch("warm-up", 3)[1] is None:
             return
