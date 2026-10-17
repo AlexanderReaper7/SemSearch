@@ -511,7 +511,7 @@ def agent_ask(binary: Path, endpoint: str, model: str, query: str) -> dict:
             case "note" if "search failed" in e["message"] or "reranking failed" in e["message"]:
                 stats["degraded_searches"] += 1
             case "done":
-                stats["turns"], stats["stopped"] = e["turns"], e["stopped"]
+                stats["turns"], stats["stopped"] = e["turns"], e.get("stopped")
             case "error":
                 stats["error"] = e["message"][:300]
     if p.returncode and "error" not in stats:
