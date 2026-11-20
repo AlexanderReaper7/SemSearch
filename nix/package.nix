@@ -7,6 +7,7 @@
   git,
   ripgrep,
   sqlite,
+  util-linux,
   cpuArch ? null,
 }:
 rustPlatform.buildRustPackage {
@@ -22,10 +23,14 @@ rustPlatform.buildRustPackage {
   };
   cargoLock.lockFile = ../Cargo.lock;
 
-  # ask's tests run its grep and file tools, which call rg and git.
+  # ask's tests run its grep and file tools, which call rg and git, and
+  # setsid, for the test of output held past a tool's deadline: without it the
+  # held sleep never starts, the pipe closes at once and the test sees the
+  # answer instead of the timeout.
   nativeCheckInputs = [
     git
     ripgrep
+    util-linux
   ];
 
   # The index links nixpkgs' SQLite, not the copy that rusqlite's "bundled"
